@@ -1,0 +1,111 @@
+version: '3.8'
+
+services:
+  # VoiceMesh API and Voice Pipeline
+  voicemesh:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: voicemesh-app
+    ports:
+      - "8080:8080"
+    environment:
+      - ENV=development
+      - DATABASE_URL=postgresql://voicemesh:voicemesh_password@postgres:5432/voicemesh
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+    networks:
+      - voicemesh-network
+    restart: unless-stopped
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: voicemesh-postgres
+    environment:
+      POSTGRES_DB: voicemesh
+      POSTGRES_USER: voicemesh
+      POSTGRES_PASSWORD: voicemesh_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voicemesh"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - voicemesh-network
+    restart: unless-stopped
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: voicemesh-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - voicemesh-network
+    restart: unless-stopped
+
+  # pgAdmin (optional - for database management)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: voicemesh-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@voicemesh.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    networks:
+      - voicemesh-network
+    restart: unless-stopped
+    profiles:
+      - tools
+
+  # Redis Commander (optional - for Redis management)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: voicemesh-redis-commander
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - voicemesh-network
+    restart: unless-stopped
+    profiles:
+      - tools
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+
+networks:
+  voicemesh-network:
+    driver: bridge
