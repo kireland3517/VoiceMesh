@@ -75,16 +75,22 @@
 | Component | Provider | Cost/Min | Rationale |
 |-----------|----------|----------|-----------|
 | **STT** | Deepgram Nova-3 | $0.0077 | Best accuracy/cost ratio, 11.8ms latency |
-| **TTS** | ElevenLabs Turbo v2.5 | $0.015 | Most natural voices, 300ms latency |
+| **TTS** | Cartesia Sonic | $0.005 | Excellent voices, 135ms latency, 3x cheaper than ElevenLabs |
 | **LLM** | Claude 3.5 Sonnet | $0.003-$0.015 | Best reasoning, tool use, MCP support |
 | **Telephony** | SignalWire | $0.0085 | Current provider, SIP trunking |
 
-**Total Cost:** $0.034/min base + $0.01/min infrastructure = **$0.044/min**
+**TTS Decision: Cartesia over ElevenLabs**
+- **Cost**: $0.005/min vs $0.015/min (3x cheaper)
+- **Latency**: 135ms vs 300ms (55% faster first chunk)
+- **Voice Quality**: 8.5/10 vs 10/10 (acceptable trade-off)
+- **Result**: 27% total cost reduction while maintaining excellent voice quality
+
+**Total Cost:** $0.024/min base + $0.008/min infrastructure = **$0.032/min**
 
 **Competitive Analysis:**
-- Retell AI: $0.13-0.31/min (66-85% higher)
-- Vapi: $0.13-0.30/min (66-85% higher)
-- VoiceMesh target: $0.044/min (cost) → sell at $0.08-0.12/min (45-73% margin)
+- Retell AI: $0.13-0.31/min (75-90% higher)
+- Vapi: $0.13-0.30/min (75-90% higher)
+- VoiceMesh target: $0.032/min (cost) → sell at $0.08-0.12/min (60-73% margin)
 
 ---
 
@@ -100,16 +106,33 @@
 | **Cost (MVP)** | 15% | ⭐⭐⭐⭐ $13-150 | ⭐⭐⭐⭐⭐ $40-225 | ⭐⭐ $200-500 | ⭐⭐⭐⭐ $50-200 | ⭐⭐⭐⭐ Credits |
 | **Developer Experience** | 10% | ⭐⭐⭐⭐ Good CLI | ⭐⭐⭐⭐⭐ Excellent | ⭐⭐⭐ Complex | ⭐⭐⭐⭐ Good | ⭐⭐⭐ Moderate |
 
-### Recommended Two-Phase Strategy
+### Recommended Strategy: Fly.io Native (All Phases)
 
-#### Phase 1: MVP on Fly.io (Months 0-12)
+**Decision: Use Fly.io for Everything**
 
-**Why Fly.io First?**
+Instead of a two-phase strategy (Fly.io → AWS), VoiceMesh uses Fly.io native services for all infrastructure needs. This reduces complexity, vendor management, and costs.
+
+**Why Fly.io Only?**
 1. **Security:** Firecracker microVMs provide VM-level isolation (critical for multi-tenant code execution)
 2. **Performance:** 35 global edge regions for <50ms voice latency
-3. **Cost:** $13-150/month for MVP, predictable scaling
+3. **Cost:** $5-150/month, predictable scaling
 4. **Speed:** Deploy in minutes, not days
 5. **WebSockets:** Native support without ALB/Load Balancer complexity
+6. **All-in-One:** Database, cache, storage, monitoring, logging all native
+7. **Simplicity:** Single vendor, single bill, single support channel
+
+**Fly.io Native Services Used:**
+
+| Service | Fly.io Product | Purpose | Cost |
+|---------|----------------|---------|------|
+| **Compute** | Fly Machines | App hosting | $2-32/mo per VM |
+| **Database** | Fly Postgres | Customer data, call logs | $0 (unmanaged) or $38+ (managed) |
+| **Cache** | Upstash Redis | Sessions, rate limiting | $0.20/100k requests or $10/mo |
+| **Storage** | Tigris | Call recordings | Usage-based (S3-compatible) |
+| **Secrets** | Fly Secrets | API keys, credentials | Free |
+| **Monitoring** | Fly Metrics | Prometheus + Grafana | Free |
+| **Logging** | Fly Logs | Centralized logs | Free |
+| **Errors** | Sentry (via extension) | Error tracking | Free tier |
 
 **Fly.io Configuration:**
 ```toml
@@ -141,23 +164,27 @@ app = "voicemesh"
   secondary = "sjc"  # US West
 ```
 
-**Monthly Cost Estimate (Fly.io):**
-- 2 CPU, 2GB RAM VM: $13/month base
-- 100 concurrent calls: ~$50/month
-- 1,000 concurrent calls: ~$150/month
-- PostgreSQL (256MB): $1.94/month
-- Redis (256MB): $1.50/month
+**Monthly Cost Estimate (Fly.io Native Stack):**
+- Fly Machine (1x shared CPU, 256MB): $2/month base
+- Fly Machine (2x shared CPU, 2GB): $13/month scaled
+- Fly Postgres (unmanaged): $0/month (free tier)
+- Upstash Redis (pay-as-you-go): ~$2/month
+- Tigris storage (10GB): ~$1/month
+- 100 concurrent calls: ~$20/month total
+- 1,000 concurrent calls: ~$100/month total
 
-**Total: $16-153/month** for infrastructure
+**Total: $5-100/month** for infrastructure (significantly lower than AWS)
 
 ---
 
-#### Phase 2: AWS Migration (Month 12+)
+#### Optional: AWS Migration (If Required by Enterprise Customers)
 
-**When to Migrate:**
-- Trigger 1: Reaching 1,000+ daily calls
-- Trigger 2: Obtaining AWS Activate credits ($100K-$200K)
-- Trigger 3: Enterprise customer requiring SOC2/HIPAA
+**When to Consider AWS:**
+- Trigger 1: Enterprise customer contractually requires AWS hosting
+- Trigger 2: HIPAA compliance requiring AWS BAA
+- Trigger 3: Obtaining $100K+ AWS Activate credits
+
+**Note:** Fly.io is sufficient for most use cases including scale. Only migrate if enterprise requirements mandate it.
 
 **AWS Activate Credits Program:**
 - **Eligibility:** Pre-Series B startups with VC backing or accelerator participation
@@ -223,7 +250,7 @@ app = "voicemesh"
 ### Phase 1: Foundation (Months 1-3)
 
 **Month 1: Core Voice Pipeline**
-- Week 1-2: Pipecat pipeline with Deepgram + ElevenLabs
+- Week 1-2: Pipecat pipeline with Deepgram + Cartesia
 - Week 3: SignalWire WebSocket integration
 - Week 4: Basic MCP code execution sandbox
 
@@ -666,7 +693,7 @@ app = "voicemesh"
 
 - [ ] **API Key Setup**
   - Deepgram API key (free $200 credit)
-  - ElevenLabs API key (free tier)
+  - Cartesia API key (sign up at cartesia.ai)
   - Anthropic API key (Claude)
   - SignalWire credentials (existing)
 
@@ -680,7 +707,7 @@ app = "voicemesh"
   - Make offer by Week 3
 
 - [ ] **Build Core Voice Pipeline**
-  - Pipecat pipeline with Deepgram STT + ElevenLabs TTS
+  - Pipecat pipeline with Deepgram STT + Cartesia TTS
   - Claude 3.5 Sonnet integration
   - SignalWire WebSocket connection
   - Test with simple "hello world" call

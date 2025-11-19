@@ -19,16 +19,34 @@ VoiceMesh is a multi-tenant Voice AI platform designed to compete with Retell AI
 
 ## Technology Stack
 
+### Core Voice Pipeline (External APIs)
+
+| Component | Provider | Cost/Min | Rationale |
+|-----------|----------|----------|-----------|
+| **STT** | Deepgram Nova-3 | $0.0077 | Best accuracy/cost ratio, 11.8ms latency |
+| **TTS** | Cartesia Sonic | $0.005 | Excellent voices, 135ms latency, 3x cheaper than ElevenLabs |
+| **LLM** | Claude 3.5 Sonnet | $0.003-0.015 | Superior reasoning and tool use |
+| **Telephony** | SignalWire | $0.0085 | Reliable SIP trunking |
+
+### Infrastructure (All on Fly.io)
+
+| Component | Provider | Cost/Mo | Rationale |
+|-----------|----------|---------|-----------|
+| **Compute** | Fly Machines | $2-32 | Firecracker microVMs, 35+ global regions |
+| **Database** | Fly Postgres | $0+ | Unmanaged (free) or Managed ($38+) |
+| **Cache** | Upstash Redis (via Fly) | $0-10 | Pay-as-you-go or fixed plans |
+| **Storage** | Tigris (via Fly) | Usage-based | S3-compatible object storage |
+| **Secrets** | Fly Secrets | Free | Encrypted vault for API keys |
+| **Monitoring** | Fly Metrics | Free | Built-in Prometheus + Grafana |
+| **Logging** | Fly Logs | Free | Centralized, searchable logs |
+
+### Application Framework
+
 | Component | Provider | Rationale |
 |-----------|----------|-----------|
-| **STT** | Deepgram Nova-3 | Best accuracy/cost ratio, 11.8ms latency |
-| **TTS** | ElevenLabs Turbo v2.5 | Most natural voices, 300ms latency |
-| **LLM** | Claude 3.5 Sonnet | Superior reasoning and tool use |
-| **Telephony** | SignalWire | Reliable SIP trunking |
 | **Framework** | Pipecat | Open-source Python voice AI framework |
 | **API** | FastAPI | High-performance async Python |
-| **Database** | PostgreSQL | Reliable relational database |
-| **Cache** | Redis | Session management and rate limiting |
+| **Code Executor** | Docker | Sandboxed MCP code execution |
 
 ---
 
@@ -75,15 +93,37 @@ VoiceMesh is a multi-tenant Voice AI platform designed to compete with Retell AI
 
 ## Cost Comparison
 
+### Variable Costs (Per Minute)
+
+| Component | Cost/Min |
+|-----------|----------|
+| STT (Deepgram) | $0.0077 |
+| LLM (Claude) | $0.003-0.015 |
+| TTS (Cartesia) | $0.005 |
+| Telephony (SignalWire) | $0.0085 |
+| **Total Variable** | **$0.024-0.036/min** |
+
+### Fixed Costs (Monthly)
+
+| Component | Cost/Mo |
+|-----------|---------|
+| Fly Machines (1x shared) | $2 |
+| Fly Postgres (unmanaged) | $0 |
+| Upstash Redis (pay-as-you-go) | ~$2 |
+| Storage (5GB) | $0.75 |
+| **Total Fixed** | **~$5/mo** |
+
+### Competitive Comparison
+
 | Provider | Cost per Minute | Annual (100K mins) |
 |----------|----------------|-------------------|
 | **Retell AI** | $0.13 - $0.31 | $15,600 - $37,200 |
 | **Vapi** | $0.13 - $0.30 | $15,600 - $36,000 |
-| **VoiceMesh** | $0.044 (cost) | $5,280 |
+| **VoiceMesh** | $0.032 (cost) | $3,200 |
 
-**Savings:** 60-75% lower cost structure
+**Savings:** 75-90% lower cost structure
 
-**Pricing Strategy:** Sell at $0.08-0.12/min for 45-73% margin
+**Pricing Strategy:** Sell at $0.08-0.12/min for 60-73% margin
 
 ---
 
@@ -115,7 +155,7 @@ cp .env.example .env
 
 # Edit .env with your API keys
 # DEEPGRAM_API_KEY=your_key_here
-# ELEVENLABS_API_KEY=your_key_here
+# CARTESIA_API_KEY=your_key_here
 # ANTHROPIC_API_KEY=your_key_here
 # SIGNALWIRE_PROJECT_ID=your_project_id
 # SIGNALWIRE_TOKEN=your_token
@@ -215,7 +255,7 @@ async def start_call():
         await websocket.send(json.dumps({
             "type": "start",
             "config": {
-                "voice": "rachel",  # ElevenLabs voice
+                "voice": "professional-female",  # Cartesia voice
                 "language": "en-US",
                 "functions": ["lookup_zipcode", "check_business_hours"]
             }
@@ -428,8 +468,9 @@ Built with:
 - [Pipecat](https://github.com/pipecat-ai/pipecat) - Voice AI framework
 - [FastAPI](https://fastapi.tiangolo.com/) - Modern Python web framework
 - [Deepgram](https://deepgram.com/) - STT provider
-- [ElevenLabs](https://elevenlabs.io/) - TTS provider
+- [Cartesia](https://cartesia.ai/) - TTS provider
 - [Anthropic Claude](https://anthropic.com/) - LLM provider
+- [Fly.io](https://fly.io/) - Cloud platform
 
 Inspired by the need for affordable, flexible Voice AI infrastructure.
 

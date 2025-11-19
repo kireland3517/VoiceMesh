@@ -1,7 +1,22 @@
+# VoiceMesh Local Development Environment
+#
+# This docker-compose is for LOCAL DEVELOPMENT only.
+# Production deployment uses Fly.io native services:
+#   - Fly Machines (compute)
+#   - Fly Postgres (database)
+#   - Upstash Redis (cache)
+#   - Tigris (object storage)
+#
+# Usage:
+#   docker-compose up -d              # Start all services
+#   docker-compose --profile tools up # Include pgAdmin and Redis Commander
+#   docker-compose logs -f            # View logs
+#   docker-compose down               # Stop services
+
 version: '3.8'
 
 services:
-  # VoiceMesh API and Voice Pipeline
+  # VoiceMesh API and Voice Pipeline (Deepgram STT + Claude LLM + Cartesia TTS)
   voicemesh:
     build:
       context: .

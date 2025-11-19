@@ -1,0 +1,78 @@
+# VoiceMesh Fly.io Configuration
+# Documentation: https://fly.io/docs/reference/configuration/
+
+app = "voicemesh"
+primary_region = "iad"  # US East (Ashburn, Virginia)
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  ENV = "production"
+  LOG_LEVEL = "INFO"
+
+# HTTP service configuration
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false  # Keep warm for real-time voice
+  auto_start_machines = true
+  min_machines_running = 1    # Always at least 1 instance up
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 100
+    soft_limit = 80
+
+# Health checks
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/health"
+
+# VM configuration
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+  # Scale up for production
+  # size = "shared-cpu-2x"
+  # memory = "2gb"
+
+# Multi-region deployment (uncomment for global distribution)
+# [[vm]]
+#   size = "shared-cpu-1x"
+#   memory = "512mb"
+#
+# [regions]
+#   pool = ["iad", "lhr", "nrt", "syd"]  # US, EU, Asia, Australia
+
+# Metrics endpoint for Prometheus/Grafana
+[metrics]
+  port = 9091
+  path = "/metrics"
+
+# Mounts for persistent data (if needed)
+# [[mounts]]
+#   source = "voicemesh_data"
+#   destination = "/app/data"
+#   initial_size = "1gb"
+
+# Statics (if serving static files)
+# [[statics]]
+#   guest_path = "/app/static"
+#   url_prefix = "/static"
+
+# Process groups (for separating API from workers)
+[processes]
+  app = "uvicorn src.api.main:app --host 0.0.0.0 --port 8080"
+  # worker = "celery -A src.worker worker --loglevel=info"
+
+# Restart policy
+[restart]
+  policy = "always"
+  max_retries = 3
