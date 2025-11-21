@@ -2,7 +2,24 @@
   "permissions": {
     "allow": [
       "Bash(git add:*)",
-      "Bash(git commit -m \"$(cat <<''EOF''\nUpdate stack: Cartesia TTS, Fly.io native services, add architecture rationale\n\n- Replace ElevenLabs with Cartesia TTS (3x cheaper, 55% lower latency)\n- Consolidate all infrastructure to Fly.io native services\n- Add fly.toml deployment configuration\n- Create ARCHITECTURE_RATIONALE.md for decision defense\n- Update all documentation to reflect new stack\n- Total cost: $0.032/min (75-90% cheaper than competitors)\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")"
+      "Bash(git commit -m \"$(cat <<''EOF''\nUpdate stack: Cartesia TTS, Fly.io native services, add architecture rationale\n\n- Replace ElevenLabs with Cartesia TTS (3x cheaper, 55% lower latency)\n- Consolidate all infrastructure to Fly.io native services\n- Add fly.toml deployment configuration\n- Create ARCHITECTURE_RATIONALE.md for decision defense\n- Update all documentation to reflect new stack\n- Total cost: $0.032/min (75-90% cheaper than competitors)\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git push:*)",
+      "Bash(curl:*)",
+      "Bash(python -m pip install:*)",
+      "Bash(python -m uvicorn:*)",
+      "Bash(timeout /T 3)",
+      "Bash(nul)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(taskkill:*)",
+      "Bash(powershell -Command \"irm http://localhost:8080/customers/ -Method Get\")",
+      "Bash(ConvertTo-Json)",
+      "Bash(Stop-Process -Id 62452 -Force)",
+      "Bash(powershell -Command \"Stop-Process -Id 62452 -Force\")",
+      "Bash(timeout /T 3 /NOBREAK)",
+      "Bash(powershell -Command \"irm http://localhost:8080/customers/ -Method Get | ConvertTo-Json\")",
+      "Bash(fly deploy:*)",
+      "Bash(fly apps list:*)"
     ],
     "deny": [],
     "ask": []

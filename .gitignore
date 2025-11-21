@@ -192,3 +192,7 @@ scratch/
 temp/
 tmp/
 local_config.py
+nul
+
+# Claude Code
+.claude/settings.local.json

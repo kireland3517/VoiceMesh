@@ -72,7 +72,5 @@ primary_region = "iad"  # US East (Ashburn, Virginia)
   app = "uvicorn src.api.main:app --host 0.0.0.0 --port 8080"
   # worker = "celery -A src.worker worker --loglevel=info"
 
-# Restart policy
-[restart]
-  policy = "always"
-  max_retries = 3
+# Restart policy is handled automatically by Fly.io
+# Machines restart on crashes by default
