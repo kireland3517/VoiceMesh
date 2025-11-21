@@ -6,7 +6,7 @@ pydantic-settings==2.6.0
 
 # Voice AI Framework
 pipecat-ai==0.0.40
-# daily-python not needed - we use Daily REST API directly with aiohttp
+daily-python==0.10.1  # Required by pipecat for DailyTransport (Linux only, not available on Windows)
 
 # Speech Services
 deepgram-sdk==3.2.0
