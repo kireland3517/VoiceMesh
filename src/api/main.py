@@ -7,7 +7,7 @@ import structlog
 
 from src.api.config import settings
 from src.api.database import init_db, close_db
-from src.api.routes import customers, voice
+from src.api.routes import customers, voice, voice_config
 
 # Configure structured logging
 structlog.configure(
@@ -41,6 +41,7 @@ app.add_middleware(
 # Register routers
 app.include_router(customers.router)
 app.include_router(voice.router)
+app.include_router(voice_config.router)
 
 
 @app.on_event("startup")

@@ -1,7 +1,7 @@
 """Voice pipeline using Pipecat for real-time voice AI conversations."""
 
 import asyncio
-from typing import Optional
+from typing import Optional, Dict, Any
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -14,6 +14,7 @@ import structlog
 
 from src.api.config import settings
 from src.api.models import Customer, Function
+from src.platform.cartesia_tts import CartesiaTTSService, CARTESIA_VOICES
 
 logger = structlog.get_logger()
 
@@ -29,16 +30,56 @@ class VoiceMeshPipeline:
     4. Function calling → MCP execution
     """
 
-    def __init__(self, customer: Customer):
+    def __init__(
+        self,
+        customer: Customer,
+        deepgram_config: Optional[Dict[str, Any]] = None,
+        cartesia_config: Optional[Dict[str, Any]] = None
+    ):
         """
         Initialize voice pipeline for a customer.
 
         Args:
             customer: Customer making the call
+            deepgram_config: Deepgram STT configuration options
+                - model: "nova-2", "nova", "enhanced", "base" (default: "nova-2")
+                - language: "en", "es", "fr", etc. (default: "en")
+                - smart_format: Enable smart formatting (default: True)
+                - punctuate: Add punctuation (default: True)
+                - profanity_filter: Filter profanity (default: False)
+                - keywords: List of keywords to boost recognition
+            cartesia_config: Cartesia TTS configuration options
+                - voice_id: Voice ID or name (default: "barbershop_man")
+                - model_id: "sonic-english" or "sonic-multilingual" (default: "sonic-english")
+                - speed: Speech speed 0.5-2.0 (default: 1.0)
+                - emotion: "neutral", "happy", "sad", "angry", etc. (default: None)
         """
         self.customer = customer
         self.pipeline: Optional[Pipeline] = None
         self.runner: Optional[PipelineRunner] = None
+
+        # Deepgram configuration
+        self.deepgram_config = deepgram_config or {}
+        self.deepgram_model = self.deepgram_config.get("model", "nova-2")
+        self.deepgram_language = self.deepgram_config.get("language", "en")
+        self.deepgram_smart_format = self.deepgram_config.get("smart_format", True)
+        self.deepgram_punctuate = self.deepgram_config.get("punctuate", True)
+        self.deepgram_profanity_filter = self.deepgram_config.get("profanity_filter", False)
+        self.deepgram_keywords = self.deepgram_config.get("keywords", [])
+
+        # Cartesia configuration
+        self.cartesia_config = cartesia_config or {}
+        voice_id_or_name = self.cartesia_config.get("voice_id", "barbershop_man")
+
+        # If it's a voice name, look up the ID
+        if voice_id_or_name in CARTESIA_VOICES:
+            self.cartesia_voice_id = CARTESIA_VOICES[voice_id_or_name]
+        else:
+            self.cartesia_voice_id = voice_id_or_name
+
+        self.cartesia_model = self.cartesia_config.get("model_id", "sonic-english")
+        self.cartesia_speed = self.cartesia_config.get("speed", 1.0)
+        self.cartesia_emotion = self.cartesia_config.get("emotion", None)
 
     async def setup_pipeline(
         self,
@@ -74,30 +115,50 @@ class VoiceMeshPipeline:
             )
         )
 
-        # 2. Speech-to-Text (Deepgram)
-        stt_service = DeepgramSTTService(
-            api_key=settings.DEEPGRAM_API_KEY,
-            language="en"
-        )
+        # 2. Speech-to-Text (Deepgram with custom configuration)
+        stt_params = {
+            "api_key": settings.DEEPGRAM_API_KEY,
+            "language": self.deepgram_language,
+        }
+
+        # Add optional Deepgram parameters
+        if self.deepgram_model:
+            stt_params["model"] = self.deepgram_model
+        if self.deepgram_smart_format:
+            stt_params["smart_format"] = True
+        if self.deepgram_punctuate:
+            stt_params["punctuate"] = True
+        if self.deepgram_profanity_filter:
+            stt_params["profanity_filter"] = True
+        if self.deepgram_keywords:
+            stt_params["keywords"] = self.deepgram_keywords
+
+        stt_service = DeepgramSTTService(**stt_params)
 
         # 3. LLM (Claude via Anthropic)
         llm_service = AnthropicLLMService(
             api_key=settings.ANTHROPIC_API_KEY,
-            model="claude-3-5-sonnet-20241022"
+            model="claude-3-5-sonnet-20241022",
+            system=self.get_system_prompt()
         )
 
-        # 4. Text-to-Speech (Cartesia - will implement custom service)
-        # For now, we'll use a placeholder
-        # tts_service = CartesiaTTSService(api_key=settings.CARTESIA_API_KEY)
+        # 4. Text-to-Speech (Cartesia with custom configuration)
+        tts_service = CartesiaTTSService(
+            api_key=settings.CARTESIA_API_KEY,
+            voice_id=self.cartesia_voice_id,
+            model_id=self.cartesia_model,
+            speed=self.cartesia_speed,
+            emotion=self.cartesia_emotion
+        )
 
         # 5. Build the pipeline
-        # self.pipeline = Pipeline([
-        #     transport.input(),
-        #     stt_service,
-        #     llm_service,
-        #     tts_service,
-        #     transport.output()
-        # ])
+        self.pipeline = Pipeline([
+            transport.input(),
+            stt_service,
+            llm_service,
+            tts_service,
+            transport.output()
+        ])
 
         # Create pipeline task
         task = PipelineTask(

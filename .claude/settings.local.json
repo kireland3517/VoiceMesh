@@ -19,7 +19,12 @@
       "Bash(timeout /T 3 /NOBREAK)",
       "Bash(powershell -Command \"irm http://localhost:8080/customers/ -Method Get | ConvertTo-Json\")",
       "Bash(fly deploy:*)",
-      "Bash(fly apps list:*)"
+      "Bash(fly apps list:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nAdd complete VoiceMesh FastAPI backend with voice webhook support\n\nBackend Features:\n- FastAPI async web framework with SQLAlchemy ORM\n- Customer management with secure API key authentication (SHA256+salt)\n- Database models: Customer, Call, Function\n- CRUD endpoints for customer management\n- Voice webhook handlers for SignalWire integration\n- Prompt testing endpoint with example use case templates\n- Health check and monitoring endpoints\n\nVoice AI Stack:\n- Pipecat framework integration (dependencies installed)\n- Deepgram SDK for speech-to-text (ready for integration)\n- Cartesia SDK for text-to-speech (ready for integration)\n- Anthropic Claude 3.5 Sonnet for conversation AI\n- SignalWire telephony provider (TwiML-compatible)\n\nInfrastructure:\n- Fly.io deployment configuration (fly.toml)\n- Multi-stage Docker build for production\n- PostgreSQL for production, SQLite for local dev\n- Redis caching via Upstash\n- Tigris object storage (S3-compatible)\n\nDependencies:\n- Resolved all version conflicts between Pipecat, Deepgram, Cartesia\n- Using Twilio TwiML library (SignalWire compatible)\n- Updated aiohttp to 3.10.10 for Pipecat compatibility\n\nNext Steps:\n- Integrate Deepgram STT into voice pipeline\n- Integrate Cartesia TTS into voice pipeline\n- Complete Pipecat pipeline orchestration\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(flyctl tokens create:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nAdd GitHub Actions workflow for automatic Fly.io deployment\n\n- Auto-deploy to Fly.io on push to main branch\n- Also allows manual deployment via workflow_dispatch\n- Uses flyctl deploy --remote-only for faster builds\n- Requires FLY_API_TOKEN secret in GitHub repository\n\nSetup instructions:\n1. Go to https://github.com/kireland3517/VoiceMesh/settings/secrets/actions\n2. Click \"New repository secret\"\n3. Name: FLY_API_TOKEN\n4. Value: [Fly.io deploy token]\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(timeout:*)",
+      "Bash(python:*)"
     ],
     "deny": [],
     "ask": []
