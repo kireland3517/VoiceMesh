@@ -28,7 +28,7 @@ primary_region = "iad"  # US East (Ashburn, Virginia)
 
 # Health checks
 [[http_service.checks]]
-  grace_period = "10s"
+  grace_period = "60s"  # Increased to allow app time to initialize
   interval = "30s"
   method = "GET"
   timeout = "5s"
