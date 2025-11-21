@@ -5,7 +5,7 @@ pydantic==2.8.2
 pydantic-settings==2.6.0
 
 # Voice AI Framework
-pipecat-ai[silero]==0.0.40  # Includes Silero VAD for voice activity detection
+pipecat-ai==0.0.40  # VAD disabled for faster deployment
 daily-python==0.10.1  # Required by pipecat for DailyTransport (Linux only, not available on Windows)
 
 # Speech Services

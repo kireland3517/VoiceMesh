@@ -8,9 +8,12 @@ from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.services.deepgram import DeepgramSTTService
 from pipecat.services.anthropic import AnthropicLLMService
 from pipecat.transports.services.daily import DailyTransport, DailyParams
-from pipecat.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import LLMMessagesFrame, EndFrame
 import structlog
+
+# Note: Silero VAD disabled for faster deployment
+# To enable: pip install pipecat-ai[silero] and uncomment below
+# from pipecat.vad.silero import SileroVADAnalyzer
 
 from src.api.config import settings
 from src.api.models import Customer, Function
@@ -102,6 +105,7 @@ class VoiceMeshPipeline:
         )
 
         # 1. Transport (Daily.co for now, will add SignalWire)
+        # Note: VAD disabled for now (Silero requires heavy ML dependencies)
         transport = DailyTransport(
             room_url,
             token,
@@ -109,8 +113,7 @@ class VoiceMeshPipeline:
             DailyParams(
                 audio_out_enabled=True,
                 audio_in_enabled=True,
-                vad_enabled=True,
-                vad_analyzer=SileroVADAnalyzer(),
+                vad_enabled=False,  # Disabled for faster deployment
                 transcription_enabled=False  # We use Deepgram
             )
         )
