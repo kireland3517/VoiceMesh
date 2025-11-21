@@ -21,6 +21,7 @@ class Settings:
     # Voice Services
     DEEPGRAM_API_KEY: str = os.getenv("DEEPGRAM_API_KEY", "")
     CARTESIA_API_KEY: str = os.getenv("CARTESIA_API_KEY", "")
+    DAILY_API_KEY: str = os.getenv("DAILY_API_KEY", "")  # For Daily.co SIP bridge
 
     # LLM
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")

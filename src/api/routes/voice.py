@@ -1,21 +1,26 @@
 """Voice AI testing and call management endpoints."""
 
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
-from twilio.twiml.voice_response import VoiceResponse, Gather, Say
+from twilio.twiml.voice_response import VoiceResponse, Gather, Say, Dial
 
 from src.api.database import get_db
 from src.api.models import Customer, Call
 from anthropic import Anthropic
-
 from src.api.config import settings
+from src.platform.daily_integration import DailyRoomManager
+from src.platform.voice_pipeline import VoiceMeshPipeline
 
 logger = structlog.get_logger()
 
 router = APIRouter(prefix="/voice", tags=["voice"])
+
+# Initialize Daily room manager
+daily_manager = DailyRoomManager(settings.DAILY_API_KEY) if settings.DAILY_API_KEY else None
 
 
 class PromptTestRequest(BaseModel):
@@ -267,19 +272,25 @@ async def handle_incoming_call(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    SignalWire webhook for incoming voice calls.
+    SignalWire webhook for incoming voice calls with Deepgram + Cartesia.
 
-    When someone calls your SignalWire number, this endpoint:
-    1. Receives call metadata from SignalWire
-    2. Creates a Call record in the database
-    3. Returns TwiML to greet caller and start AI conversation
+    Architecture:
+    1. SignalWire call comes in → this webhook
+    2. Create Daily.co room with SIP enabled
+    3. Start Pipecat pipeline connected to Daily room (Deepgram + Claude + Cartesia)
+    4. Return TwiML directing SignalWire to dial Daily's SIP endpoint
+    5. Audio flows: SignalWire → Daily (SIP) → Pipecat (WebRTC) → Deepgram/Cartesia
 
     Configure this as your SignalWire phone number webhook:
-    https://your-app.fly.dev/voice/incoming-call?customer_id=YOUR_CUSTOMER_ID
+    https://voicemesh.fly.dev/voice/incoming-call?customer_id=YOUR_CUSTOMER_ID
 
     Args:
         customer_id: Query parameter to identify which customer owns this number
     """
+    if not daily_manager:
+        logger.error("daily_api_key_not_configured")
+        raise HTTPException(status_code=500, detail="Daily.co not configured")
+
     # Get call parameters from SignalWire
     form_data = await request.form()
 
@@ -319,39 +330,158 @@ async def handle_incoming_call(
 
     db.add(call)
     await db.commit()
+    await db.refresh(call)  # Get the generated ID
 
     logger.info("call_record_created", call_id=call.id, customer_id=customer_id)
 
-    # Create VoiceResponse with AI greeting
-    response = VoiceResponse()
+    try:
+        # Create Daily.co room for this call
+        room = await daily_manager.create_room(call.id, enable_recording=True)
 
-    # Greet the caller
-    response.say(
-        "Hello! Welcome to Voice Mesh. I'm your A I assistant. How can I help you today?",
-        voice="Polly.Joanna",
-        language="en-US"
-    )
+        logger.info(
+            "daily_room_created_for_call",
+            call_id=call.id,
+            room_url=room["url"],
+            sip_endpoint=room["sip_endpoint"]
+        )
 
-    # Gather speech input
-    gather = Gather(
-        input="speech",
-        action=f"/voice/process-speech?call_id={call.id}",
-        method="POST",
-        speech_timeout="auto",
-        language="en-US"
-    )
+        # Start Pipecat pipeline in background
+        # Pipeline will connect to Daily room and process audio through Deepgram + Claude + Cartesia
+        asyncio.create_task(
+            start_voice_pipeline(
+                customer=customer,
+                call=call,
+                room_url=room["url"],
+                room_token=room["token"],
+                db=db
+            )
+        )
 
-    response.append(gather)
+        # Return TwiML directing SignalWire to dial Daily's SIP endpoint
+        response = VoiceResponse()
+        dial = Dial()
 
-    # If no input, say goodbye
-    response.say("I didn't hear anything. Goodbye!")
-    response.hangup()
+        # Format: <sip_endpoint>@sip.daily.co
+        dial.sip(f"sip:{room['sip_endpoint']}@sip.daily.co")
 
-    # Return TwiML as XML
-    return Response(
-        content=str(response),
-        media_type="application/xml"
-    )
+        response.append(dial)
+
+        logger.info(
+            "twiml_response_sent",
+            call_id=call.id,
+            sip_endpoint=room["sip_endpoint"]
+        )
+
+        # Return TwiML as XML
+        return Response(
+            content=str(response),
+            media_type="application/xml"
+        )
+
+    except Exception as e:
+        logger.error(
+            "incoming_call_processing_failed",
+            call_id=call.id,
+            error=str(e)
+        )
+
+        # Return error TwiML
+        response = VoiceResponse()
+        response.say("Sorry, we're experiencing technical difficulties. Please try again later.")
+        response.hangup()
+
+        return Response(
+            content=str(response),
+            media_type="application/xml"
+        )
+
+
+async def start_voice_pipeline(
+    customer: Customer,
+    call: Call,
+    room_url: str,
+    room_token: str,
+    db: AsyncSession
+):
+    """
+    Start the Pipecat voice pipeline for a call.
+
+    This runs in the background and connects to the Daily room.
+    Audio flows through: Daily → Deepgram STT → Claude LLM → Cartesia TTS → Daily
+
+    Args:
+        customer: Customer making the call
+        call: Call record
+        room_url: Daily.co room URL
+        room_token: Bot token for Daily room
+        db: Database session
+    """
+    try:
+        logger.info(
+            "starting_voice_pipeline",
+            call_id=call.id,
+            customer_id=customer.id
+        )
+
+        # Create and configure pipeline
+        # TODO: Get voice config from customer settings or use defaults
+        pipeline = VoiceMeshPipeline(
+            customer=customer,
+            deepgram_config={
+                "model": "nova-2",
+                "language": "en",
+                "smart_format": True,
+                "punctuate": True
+            },
+            cartesia_config={
+                "voice_id": "helpful_woman",
+                "speed": 1.0,
+                "emotion": "neutral"
+            }
+        )
+
+        # Set up pipeline with Daily transport
+        await pipeline.setup_pipeline(
+            room_url=room_url,
+            token=room_token,
+            bot_name="VoiceMesh AI"
+        )
+
+        # Start pipeline (blocks until call ends)
+        await pipeline.start()
+
+        logger.info(
+            "voice_pipeline_completed",
+            call_id=call.id
+        )
+
+        # Update call status
+        call.status = "completed"
+        await db.commit()
+
+    except Exception as e:
+        logger.error(
+            "voice_pipeline_failed",
+            call_id=call.id,
+            error=str(e)
+        )
+
+        # Update call status to failed
+        call.status = "failed"
+        await db.commit()
+
+    finally:
+        # Clean up Daily room
+        if daily_manager:
+            try:
+                room_name = f"voicemesh-{call.id}"
+                await daily_manager.delete_room(room_name)
+            except Exception as e:
+                logger.warning(
+                    "daily_room_cleanup_failed",
+                    call_id=call.id,
+                    error=str(e)
+                )
 
 
 @router.post("/process-speech")
