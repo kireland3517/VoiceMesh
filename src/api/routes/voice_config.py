@@ -7,11 +7,32 @@ from typing import Optional, List
 import structlog
 
 from src.api.database import get_db
-from src.platform.cartesia_tts import CARTESIA_VOICES, CARTESIA_EMOTIONS
 
 logger = structlog.get_logger()
 
 router = APIRouter(prefix="/voice/config", tags=["voice-config"])
+
+# Cartesia voice IDs
+CARTESIA_VOICES = {
+    "barbershop_man": "a0e99841-438c-4a64-b679-ae501e7d6091",
+    "helpful_woman": "b7d50908-b17c-442d-ad8d-810c63997ed9",
+    "salesman": "71a7ad14-091c-4e8e-a314-022ece01c121",
+    "newscaster": "d46abd1d-2d02-43e8-819f-51fb652c1c61",
+    "friendly_sidekick": "41534e16-2966-4c6b-9670-111411def906",
+    "customer_support": "87748186-23bb-4158-a1eb-332911b0b708",
+    "meditation": "58d6d48c-27e6-4e1e-9e3d-6fbdc3876174",
+}
+
+# Supported emotions
+CARTESIA_EMOTIONS = [
+    "neutral",
+    "happy",
+    "sad",
+    "angry",
+    "curious",
+    "surprised",
+    "calm"
+]
 
 
 # ==================== Deepgram Configuration ====================

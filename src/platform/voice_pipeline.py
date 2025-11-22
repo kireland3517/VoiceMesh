@@ -15,9 +15,10 @@ import structlog
 # To enable: pip install pipecat-ai[silero] and uncomment below
 # from pipecat.vad.silero import SileroVADAnalyzer
 
+from pipecat.services.cartesia import CartesiaTTSService
+
 from src.api.config import settings
 from src.api.models import Customer, Function
-from src.platform.cartesia_tts import CartesiaTTSService, CARTESIA_VOICES
 
 logger = structlog.get_logger()
 
@@ -72,16 +73,9 @@ class VoiceMeshPipeline:
 
         # Cartesia configuration
         self.cartesia_config = cartesia_config or {}
-        voice_id_or_name = self.cartesia_config.get("voice_id", "barbershop_man")
-
-        # If it's a voice name, look up the ID
-        if voice_id_or_name in CARTESIA_VOICES:
-            self.cartesia_voice_id = CARTESIA_VOICES[voice_id_or_name]
-        else:
-            self.cartesia_voice_id = voice_id_or_name
-
+        self.cartesia_voice_id = self.cartesia_config.get("voice_id", "a0e99841-438c-4a64-b679-ae501e7d6091")  # Default: Barbershop Man
         self.cartesia_model = self.cartesia_config.get("model_id", "sonic-english")
-        self.cartesia_speed = self.cartesia_config.get("speed", 1.0)
+        self.cartesia_speed = self.cartesia_config.get("speed", None)
         self.cartesia_emotion = self.cartesia_config.get("emotion", None)
 
     async def setup_pipeline(
@@ -146,12 +140,21 @@ class VoiceMeshPipeline:
         )
 
         # 4. Text-to-Speech (Cartesia with custom configuration)
+        # Build params for voice customization
+        params_config = {}
+        if self.cartesia_speed or self.cartesia_emotion:
+            generation_config = {}
+            if self.cartesia_speed:
+                generation_config["speed"] = self.cartesia_speed
+            if self.cartesia_emotion:
+                generation_config["emotion"] = self.cartesia_emotion
+            params_config["generation_config"] = generation_config
+
         tts_service = CartesiaTTSService(
             api_key=settings.CARTESIA_API_KEY,
             voice_id=self.cartesia_voice_id,
-            model_id=self.cartesia_model,
-            speed=self.cartesia_speed,
-            emotion=self.cartesia_emotion
+            model=self.cartesia_model,
+            params=CartesiaTTSService.InputParams(**params_config) if params_config else None
         )
 
         # 5. Build the pipeline
