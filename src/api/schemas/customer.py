@@ -12,6 +12,8 @@ class CustomerBase(BaseModel):
     phone: Optional[str] = Field(None, max_length=50)
     default_voice: Optional[str] = Field(None, max_length=100)
     default_language: str = Field("en", max_length=10)
+    system_prompt: Optional[str] = None
+    voice_config: Optional[dict] = None
     notes: Optional[str] = None
 
 
@@ -27,6 +29,8 @@ class CustomerUpdate(BaseModel):
     phone: Optional[str] = Field(None, max_length=50)
     default_voice: Optional[str] = Field(None, max_length=100)
     default_language: Optional[str] = Field(None, max_length=10)
+    system_prompt: Optional[str] = None
+    voice_config: Optional[dict] = None
     notes: Optional[str] = None
     is_active: Optional[bool] = None
 
