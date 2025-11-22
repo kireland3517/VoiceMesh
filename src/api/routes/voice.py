@@ -299,6 +299,16 @@ async def handle_incoming_call(
     to_number = form_data.get("To")
     call_status = form_data.get("CallStatus")
 
+    # Handle SignalWire validation requests (no CallSid)
+    if not call_sid:
+        logger.info("signalwire_validation_request", customer_id=customer_id)
+        response = VoiceResponse()
+        response.say("VoiceMesh webhook is configured correctly.")
+        return Response(
+            content=str(response),
+            media_type="application/xml"
+        )
+
     logger.info(
         "incoming_call_received",
         customer_id=customer_id,
