@@ -14,10 +14,26 @@ logger = structlog.get_logger()
 if settings.DATABASE_URL:
     # Convert postgres:// to postgresql+asyncpg:// for async support
     database_url = settings.DATABASE_URL.replace("postgres://", "postgresql+asyncpg://").replace("postgresql://", "postgresql+asyncpg://")
+
+    # asyncpg doesn't accept sslmode parameter, need to remove it
+    # and configure SSL through connect_args instead
+    if "?sslmode=" in database_url or "&sslmode=" in database_url:
+        # Remove sslmode from URL (asyncpg doesn't accept it)
+        import re
+        database_url = re.sub(r'[?&]sslmode=[^&]*', '', database_url)
+        # Clean up any leftover ? or &
+        database_url = re.sub(r'\?&', '?', database_url)
+        database_url = re.sub(r'\?$', '', database_url)
 else:
     # Use SQLite for local development
     database_url = "sqlite+aiosqlite:///./voicemesh.db"
     logger.info("using_sqlite_for_local_development")
+
+# Configure SSL for Fly.io Postgres
+connect_args = {}
+if settings.DATABASE_URL and ("sslmode=require" in settings.DATABASE_URL or "sslmode=prefer" in settings.DATABASE_URL):
+    # asyncpg uses ssl=True instead of sslmode
+    connect_args = {"ssl": "require"}
 
 engine = create_async_engine(
     database_url,
@@ -25,6 +41,7 @@ engine = create_async_engine(
     pool_pre_ping=True if settings.DATABASE_URL else False,  # Only for Postgres
     pool_size=5 if settings.DATABASE_URL else 0,  # SQLite doesn't use connection pooling
     max_overflow=10 if settings.DATABASE_URL else 0,
+    connect_args=connect_args,
 )
 
 # Create async session factory
