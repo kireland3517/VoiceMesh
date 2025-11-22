@@ -294,14 +294,18 @@ async def handle_incoming_call(
     # Get call parameters from SignalWire
     form_data = await request.form()
 
-    call_sid = form_data.get("CallSid")
-    from_number = form_data.get("From")
-    to_number = form_data.get("To")
-    call_status = form_data.get("CallStatus")
+    # Log ALL parameters to debug what SignalWire is sending
+    all_params = dict(form_data)
+    logger.info("signalwire_request_params", customer_id=customer_id, params=all_params)
+
+    call_sid = form_data.get("CallSid") or form_data.get("call_id") or form_data.get("id")
+    from_number = form_data.get("From") or form_data.get("from") or form_data.get("caller")
+    to_number = form_data.get("To") or form_data.get("to") or form_data.get("called")
+    call_status = form_data.get("CallStatus") or form_data.get("status") or form_data.get("call_state")
 
     # Handle SignalWire validation requests (no CallSid)
     if not call_sid:
-        logger.info("signalwire_validation_request", customer_id=customer_id)
+        logger.info("signalwire_validation_request_no_call_id", customer_id=customer_id, all_params=all_params)
         return JSONResponse(
             content={
                 "version": "1.0.0",
