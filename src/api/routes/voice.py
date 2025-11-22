@@ -303,9 +303,9 @@ async def handle_incoming_call(
     to_number = form_data.get("To") or form_data.get("to") or form_data.get("called")
     call_status = form_data.get("CallStatus") or form_data.get("status") or form_data.get("call_state")
 
-    # Handle SignalWire validation requests (no CallSid)
+    # SWML doesn't send parameters like TwiML - just return a simple script
     if not call_sid:
-        logger.info("signalwire_validation_request_no_call_id", customer_id=customer_id, all_params=all_params)
+        logger.info("swml_no_call_params_returning_simple_script", customer_id=customer_id)
         return JSONResponse(
             content={
                 "version": "1.0.0",
@@ -313,8 +313,11 @@ async def handle_incoming_call(
                     "main": [
                         {
                             "play": {
-                                "url": "say:VoiceMesh webhook is configured correctly"
+                                "url": "say:Hello, you have reached VoiceMesh. Please hold while we connect you to our AI assistant."
                             }
+                        },
+                        {
+                            "hangup": {}
                         }
                     ]
                 }
