@@ -455,20 +455,22 @@ async def start_voice_pipeline(
             customer_id=customer.id
         )
 
-        # Create and configure pipeline
-        # TODO: Get voice config from customer settings or use defaults
+        # Create and configure pipeline with customer settings
+        # Get voice config from customer or use defaults
+        voice_config = customer.voice_config or {}
+
         pipeline = VoiceMeshPipeline(
             customer=customer,
             deepgram_config={
                 "model": "nova-2",
-                "language": "en",
+                "language": customer.default_language or "en",
                 "smart_format": True,
                 "punctuate": True
             },
             cartesia_config={
-                "voice_id": "helpful_woman",
-                "speed": 1.0,
-                "emotion": "neutral"
+                "voice_id": voice_config.get("voice_id", "a0e99841-438c-4a64-b679-ae501e7d6091"),  # Default: Barbershop Man
+                "speed": voice_config.get("speed", 0.9),  # Slower = more natural
+                "emotion": voice_config.get("emotion")
             }
         )
 

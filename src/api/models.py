@@ -33,6 +33,8 @@ class Customer(Base):
     # Voice settings
     default_voice: Mapped[Optional[str]] = mapped_column(String(100))
     default_language: Mapped[str] = mapped_column(String(10), default="en")
+    system_prompt: Mapped[Optional[str]] = mapped_column(Text)  # AI conversation prompt
+    voice_config: Mapped[Optional[dict]] = mapped_column(JSON)  # Cartesia voice configuration
 
     # Status
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
