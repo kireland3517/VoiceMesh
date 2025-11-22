@@ -30,9 +30,9 @@ else:
     logger.info("using_sqlite_for_local_development")
 
 # Configure connection args for Fly.io Postgres
-# For internal Fly.io connections (.internal hostname), disable SSL
+# For internal Fly.io connections (.internal hostname), explicitly disable SSL
 # SSL on internal network causes ConnectionResetError with asyncpg
-connect_args = {}
+connect_args = {"ssl": False} if settings.DATABASE_URL else {}
 
 engine = create_async_engine(
     database_url,
