@@ -2,11 +2,11 @@
 
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
-from twilio.twiml.voice_response import VoiceResponse, Gather, Say, Dial
 
 from src.api.database import get_db
 from src.api.models import Customer, Call
@@ -302,11 +302,19 @@ async def handle_incoming_call(
     # Handle SignalWire validation requests (no CallSid)
     if not call_sid:
         logger.info("signalwire_validation_request", customer_id=customer_id)
-        response = VoiceResponse()
-        response.say("VoiceMesh webhook is configured correctly.")
-        return Response(
-            content=str(response),
-            media_type="application/xml"
+        return JSONResponse(
+            content={
+                "version": "1.0.0",
+                "sections": {
+                    "main": [
+                        {
+                            "play": {
+                                "url": "say:VoiceMesh webhook is configured correctly"
+                            }
+                        }
+                    ]
+                }
+            }
         )
 
     logger.info(
@@ -367,26 +375,31 @@ async def handle_incoming_call(
             )
         )
 
-        # Return TwiML directing SignalWire to dial Daily's SIP endpoint
-        response = VoiceResponse()
-        dial = Dial()
+        # Return SWML directing SignalWire to dial Daily's SIP endpoint
+        sip_uri = f"sip:{room['sip_endpoint']}@sip.daily.co"
 
-        # Format: <sip_endpoint>@sip.daily.co
-        dial.sip(f"sip:{room['sip_endpoint']}@sip.daily.co")
-
-        response.append(dial)
+        swml_response = {
+            "version": "1.0.0",
+            "sections": {
+                "main": [
+                    {
+                        "dial": {
+                            "to": sip_uri
+                        }
+                    }
+                ]
+            }
+        }
 
         logger.info(
-            "twiml_response_sent",
+            "swml_response_sent",
             call_id=call.id,
-            sip_endpoint=room["sip_endpoint"]
+            sip_endpoint=room["sip_endpoint"],
+            sip_uri=sip_uri
         )
 
-        # Return TwiML as XML
-        return Response(
-            content=str(response),
-            media_type="application/xml"
-        )
+        # Return SWML as JSON
+        return JSONResponse(content=swml_response)
 
     except Exception as e:
         logger.error(
@@ -395,14 +408,23 @@ async def handle_incoming_call(
             error=str(e)
         )
 
-        # Return error TwiML
-        response = VoiceResponse()
-        response.say("Sorry, we're experiencing technical difficulties. Please try again later.")
-        response.hangup()
-
-        return Response(
-            content=str(response),
-            media_type="application/xml"
+        # Return error SWML
+        return JSONResponse(
+            content={
+                "version": "1.0.0",
+                "sections": {
+                    "main": [
+                        {
+                            "play": {
+                                "url": "say:Sorry, we're experiencing technical difficulties. Please try again later."
+                            }
+                        },
+                        {
+                            "hangup": {}
+                        }
+                    ]
+                }
+            }
         )
 
 
@@ -525,10 +547,23 @@ async def process_speech(
 
     if not call:
         logger.error("call_not_found", call_id=call_id)
-        response = VoiceResponse()
-        response.say("Sorry, there was an error. Goodbye.")
-        response.hangup()
-        return Response(content=str(response), media_type="application/xml")
+        return JSONResponse(
+            content={
+                "version": "1.0.0",
+                "sections": {
+                    "main": [
+                        {
+                            "play": {
+                                "url": "say:Sorry, there was an error. Goodbye."
+                            }
+                        },
+                        {
+                            "hangup": {}
+                        }
+                    ]
+                }
+            }
+        )
 
     # Update call transcript
     if call.transcript:
@@ -580,30 +615,37 @@ async def process_speech(
             cost=cost_llm
         )
 
-        # Create response with AI's answer
-        response = VoiceResponse()
-        response.say(
-            assistant_text,
-            voice="Polly.Joanna",
-            language="en-US"
+        # Create SWML response with AI's answer
+        return JSONResponse(
+            content={
+                "version": "1.0.0",
+                "sections": {
+                    "main": [
+                        {
+                            "play": {
+                                "url": f"say:{assistant_text}"
+                            }
+                        },
+                        {
+                            "prompt": {
+                                "play": "say:",
+                                "max_digits": 0,
+                                "speech_timeout": 3000,
+                                "action_url": f"/voice/process-speech?call_id={call.id}"
+                            }
+                        },
+                        {
+                            "play": {
+                                "url": "say:Thank you for calling. Goodbye!"
+                            }
+                        },
+                        {
+                            "hangup": {}
+                        }
+                    ]
+                }
+            }
         )
-
-        # Gather next input
-        gather = Gather(
-            input="speech",
-            action=f"/voice/process-speech?call_id={call.id}",
-            method="POST",
-            speech_timeout="auto",
-            language="en-US"
-        )
-
-        response.append(gather)
-
-        # If no more input, end call
-        response.say("Thank you for calling. Goodbye!")
-        response.hangup()
-
-        return Response(content=str(response), media_type="application/xml")
 
     except Exception as e:
         logger.error(
@@ -612,8 +654,20 @@ async def process_speech(
             error=str(e)
         )
 
-        response = VoiceResponse()
-        response.say("Sorry, I encountered an error. Please try again later.")
-        response.hangup()
-
-        return Response(content=str(response), media_type="application/xml")
+        return JSONResponse(
+            content={
+                "version": "1.0.0",
+                "sections": {
+                    "main": [
+                        {
+                            "play": {
+                                "url": "say:Sorry, I encountered an error. Please try again later."
+                            }
+                        },
+                        {
+                            "hangup": {}
+                        }
+                    ]
+                }
+            }
+        )

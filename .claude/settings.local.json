@@ -26,7 +26,19 @@
       "Bash(timeout:*)",
       "Bash(python:*)",
       "Bash(git commit -m \"$(cat <<''EOF''\nIntegrate Deepgram STT and Cartesia TTS with full configuration\n\nVoice Pipeline Integration:\n- Created custom CartesiaTTSService for Pipecat pipeline\n- Completed VoiceMeshPipeline with Deepgram + Cartesia + Claude\n- Added configuration options for both services\n- Full pipeline: Audio → Deepgram STT → Claude LLM → Cartesia TTS → Audio\n\nDeepgram Configuration Options:\n- Model selection: nova-2, nova, enhanced, base\n- Language support: 15+ languages with variants\n- Smart formatting, punctuation, profanity filter\n- Custom keywords for improved recognition\n- Speaker diarization support\n\nCartesia Configuration Options:\n- 7 pre-configured voices (barbershop_man, helpful_woman, etc.)\n- Emotion control: neutral, happy, sad, angry, curious, surprised, calm\n- Speech speed: 0.5x to 2.0x\n- Model selection: sonic-english (200ms latency) or sonic-multilingual\n\nNew API Endpoints:\n- GET /voice/config/deepgram/models - List available STT models\n- GET /voice/config/deepgram/languages - Supported languages\n- GET /voice/config/cartesia/voices - Available TTS voices\n- GET /voice/config/cartesia/emotions - Emotion options\n- GET /voice/config/examples - Pre-configured use case examples\n- POST /voice/config/validate - Validate configuration\n\nExample Configurations for:\n- Customer Service (warm, professional)\n- Sales Outreach (energetic, engaging)\n- Medical Appointments (calm, empathetic)\n- Restaurant Reservations (friendly, casual)\n- Spanish Customer Support (multilingual)\n\nTechnical Improvements:\n- Fixed Pipecat deprecation warning (ai_services → tts_service)\n- Cost estimation in validation endpoint\n- Type-safe configuration with Pydantic models\n- Comprehensive voice customization options\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
-      "Bash(flyctl secrets set:*)"
+      "Bash(flyctl secrets set:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nSwitch to Deepgram + Cartesia via Daily.co bridge\n\nImplementation:\n- Created DailyRoomManager for room creation via REST API\n- Updated incoming call webhook to create Daily rooms\n- Bridge SignalWire calls to Daily.co via SIP\n- Start Pipecat pipeline in background on each call\n- Pipeline: SignalWire → Daily (SIP) → Pipecat (WebRTC) → Deepgram/Cartesia\n\nArchitecture Flow:\n1. SignalWire receives call → webhook to VoiceMesh\n2. VoiceMesh creates Daily room with SIP endpoint\n3. Returns TwiML directing SignalWire to dial Daily SIP\n4. Pipecat pipeline joins Daily room via WebRTC\n5. Audio flows through: Deepgram STT → Claude LLM → Cartesia TTS\n\nNew Files:\n- src/platform/daily_integration.py - Daily.co room management\n\nUpdated Files:\n- src/api/routes/voice.py - Complete rewrite of incoming call handler\n- src/api/config.py - Added DAILY_API_KEY setting\n- requirements.txt - Documented Daily REST API approach\n\nConfiguration:\n- Added DAILY_API_KEY to Fly.io secrets\n- Ready for SignalWire webhook configuration\n\nCost: $0.034/min (Daily bridge adds $0.002/min)\nLatency: ~200-300ms (Deepgram + Cartesia combined)\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(flyctl secrets list:*)",
+      "Bash(flyctl status:*)",
+      "Bash(flyctl logs:*)",
+      "Bash(flyctl machine start:*)",
+      "Bash(pip show:*)",
+      "Bash(flyctl deploy:*)",
+      "Bash(git commit:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run watch:*)",
+      "Bash(flyctl ssh console:*)",
+      "Bash(flyctl postgres:*)"
     ],
     "deny": [],
     "ask": []
