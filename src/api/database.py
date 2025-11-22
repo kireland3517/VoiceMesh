@@ -32,8 +32,8 @@ else:
 # Configure SSL for Fly.io Postgres
 connect_args = {}
 if settings.DATABASE_URL and ("sslmode=require" in settings.DATABASE_URL or "sslmode=prefer" in settings.DATABASE_URL):
-    # asyncpg uses ssl=True instead of sslmode
-    connect_args = {"ssl": "require"}
+    # asyncpg uses ssl=True (not a string like psycopg2)
+    connect_args = {"ssl": True}
 
 engine = create_async_engine(
     database_url,
