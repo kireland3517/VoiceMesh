@@ -29,11 +29,10 @@ else:
     database_url = "sqlite+aiosqlite:///./voicemesh.db"
     logger.info("using_sqlite_for_local_development")
 
-# Configure SSL for Fly.io Postgres
+# Configure connection args for Fly.io Postgres
+# For internal Fly.io connections (.internal hostname), disable SSL
+# SSL on internal network causes ConnectionResetError with asyncpg
 connect_args = {}
-if settings.DATABASE_URL and ("sslmode=require" in settings.DATABASE_URL or "sslmode=prefer" in settings.DATABASE_URL):
-    # asyncpg uses ssl=True (not a string like psycopg2)
-    connect_args = {"ssl": True}
 
 engine = create_async_engine(
     database_url,
