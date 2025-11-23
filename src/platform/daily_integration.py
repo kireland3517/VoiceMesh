@@ -29,6 +29,13 @@ class DailyRoomManager:
         self.api_key = api_key
         self.base_url = "https://api.daily.co/v1"
 
+        # Debug logging to verify API key is loaded (log first 8 chars for security)
+        logger.info(
+            "daily_manager_initialized",
+            api_key_preview=api_key[:8] + "..." if api_key and len(api_key) > 8 else "EMPTY",
+            api_key_length=len(api_key) if api_key else 0
+        )
+
     async def create_room(
         self,
         call_id: str,
