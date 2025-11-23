@@ -117,13 +117,23 @@ class DailyRoomManager:
             token = await self._create_meeting_token(session, room_name)
 
             # Get the SIP URI directly from Daily.co's API response
-            sip_uri = room_data["config"]["sip_uri"]
+            # Handle both object format {"endpoint": "..."} and string format
+            sip_uri_data = room_data["config"]["sip_uri"]
+            if isinstance(sip_uri_data, dict):
+                # Extract endpoint from object
+                sip_endpoint = sip_uri_data.get("endpoint", "")
+                # Format as proper SIP URI if not already prefixed
+                sip_uri = f"sip:{sip_endpoint}" if not sip_endpoint.startswith("sip:") else sip_endpoint
+            else:
+                # Use string directly
+                sip_uri = sip_uri_data if sip_uri_data.startswith("sip:") else f"sip:{sip_uri_data}"
 
             logger.info(
                 "daily_room_created",
                 room_name=room_name,
                 url=room_data["url"],
-                sip_uri=sip_uri
+                sip_uri=sip_uri,
+                raw_sip_uri=sip_uri_data
             )
 
             return {
