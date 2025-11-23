@@ -404,8 +404,8 @@ async def create_voice_session(
         )
 
         # Return SWML directing SignalWire to connect to Daily's SIP endpoint
-        # room['sip_endpoint'] already contains the full address: <room_name>@sip.daily.co
-        sip_uri = f"sip:{room['sip_endpoint']}"
+        # Use the sip_uri directly from Daily.co API response
+        sip_uri = room['sip_uri']
 
         swml_response = {
             "response": [
@@ -425,7 +425,6 @@ async def create_voice_session(
         logger.info(
             "swml_response_sent",
             call_id=call.id,
-            sip_endpoint=room["sip_endpoint"],
             sip_uri=sip_uri
         )
 

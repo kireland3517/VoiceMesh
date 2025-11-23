@@ -116,21 +116,21 @@ class DailyRoomManager:
             # Create meeting token for bot
             token = await self._create_meeting_token(session, room_name)
 
-            # Daily.co SIP endpoint format: <room_name>@sip.daily.co
-            sip_endpoint = f"{room_name}@sip.daily.co"
+            # Get the SIP URI directly from Daily.co's API response
+            sip_uri = room_data["config"]["sip_uri"]
 
             logger.info(
                 "daily_room_created",
                 room_name=room_name,
                 url=room_data["url"],
-                sip_endpoint=sip_endpoint
+                sip_uri=sip_uri
             )
 
             return {
                 "room_name": room_name,
                 "url": room_data["url"],
                 "token": token,
-                "sip_endpoint": sip_endpoint,
+                "sip_uri": sip_uri,
                 "expires": room_data["config"]["exp"]
             }
 
