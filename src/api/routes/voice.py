@@ -272,65 +272,70 @@ async def handle_incoming_call(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    SignalWire webhook for incoming voice calls with Deepgram + Cartesia.
+    SignalWire Primary Script for incoming calls (SWML format).
 
-    Architecture:
-    1. SignalWire call comes in → this webhook
-    2. Create Daily.co room with SIP enabled
-    3. Start Pipecat pipeline connected to Daily room (Deepgram + Claude + Cartesia)
-    4. Return TwiML directing SignalWire to dial Daily's SIP endpoint
-    5. Audio flows: SignalWire → Daily (SIP) → Pipecat (WebRTC) → Deepgram/Cartesia
+    This returns a static SWML script that uses the 'request' directive
+    to call our dynamic session creation endpoint with call variables.
 
-    Configure this as your SignalWire phone number webhook:
+    Configure this as your SignalWire phone number Primary Script URL:
     https://voicemesh.fly.dev/voice/incoming-call?customer_id=YOUR_CUSTOMER_ID
 
     Args:
         customer_id: Query parameter to identify which customer owns this number
     """
+    logger.info("swml_primary_script_requested", customer_id=customer_id)
+
+    # Return SWML that uses 'request' to create a dynamic session
+    # The request directive can pass call variables like %{call.call_id}, %{call.from}, etc.
+    return JSONResponse(
+        content={
+            "version": "1.0.0",
+            "sections": {
+                "main": [
+                    {
+                        "request": {
+                            "url": f"https://voicemesh.fly.dev/voice/create-session?customer_id={customer_id}&call_id=%{{call.call_id}}&from=%{{call.from}}&to=%{{call.to}}",
+                            "method": "POST",
+                            "expected_events": ["response_received"]
+                        }
+                    }
+                ]
+            }
+        }
+    )
+
+
+@router.post("/create-session")
+async def create_voice_session(
+    request: Request,
+    customer_id: str,
+    call_id: str,
+    db: AsyncSession = Depends(get_db),
+    from_number: str = "",
+    to_number: str = ""
+):
+    """
+    Create a Daily.co session and start Pipecat pipeline for an incoming call.
+
+    This is called by SWML's 'request' directive with call parameters.
+    Returns SWML to connect the call to Daily's SIP endpoint.
+
+    Args:
+        customer_id: Customer ID from query params
+        call_id: SignalWire call ID from SWML variable
+        from_number: Caller's phone number
+        to_number: Called number
+    """
     if not daily_manager:
         logger.error("daily_api_key_not_configured")
         raise HTTPException(status_code=500, detail="Daily.co not configured")
 
-    # Get call parameters from SignalWire
-    form_data = await request.form()
-
-    # Log ALL parameters to debug what SignalWire is sending
-    all_params = dict(form_data)
-    logger.info("signalwire_request_params", customer_id=customer_id, params=all_params)
-
-    call_sid = form_data.get("CallSid") or form_data.get("call_id") or form_data.get("id")
-    from_number = form_data.get("From") or form_data.get("from") or form_data.get("caller")
-    to_number = form_data.get("To") or form_data.get("to") or form_data.get("called")
-    call_status = form_data.get("CallStatus") or form_data.get("status") or form_data.get("call_state")
-
-    # SWML doesn't send parameters like TwiML - just return a simple script
-    if not call_sid:
-        logger.info("swml_no_call_params_returning_simple_script", customer_id=customer_id)
-        return JSONResponse(
-            content={
-                "version": "1.0.0",
-                "sections": {
-                    "main": [
-                        {
-                            "play": {
-                                "url": "say:Hello, you have reached VoiceMesh. Please hold while we connect you to our AI assistant."
-                            }
-                        },
-                        {
-                            "hangup": {}
-                        }
-                    ]
-                }
-            }
-        )
-
     logger.info(
-        "incoming_call_received",
+        "creating_voice_session",
         customer_id=customer_id,
-        call_sid=call_sid,
+        call_id=call_id,
         from_number=from_number,
-        to_number=to_number,
-        call_status=call_status
+        to_number=to_number
     )
 
     # Verify customer exists
@@ -341,12 +346,28 @@ async def handle_incoming_call(
 
     if not customer:
         logger.error("customer_not_found", customer_id=customer_id)
-        raise HTTPException(status_code=404, detail="Customer not found")
+        return JSONResponse(
+            content={
+                "version": "1.0.0",
+                "sections": {
+                    "main": [
+                        {
+                            "play": {
+                                "url": "say:Sorry, this service is not configured correctly. Please contact support."
+                            }
+                        },
+                        {
+                            "hangup": {}
+                        }
+                    ]
+                }
+            }
+        )
 
     # Create Call record
     call = Call(
         customer_id=customer_id,
-        call_sid=call_sid,
+        call_sid=call_id,
         from_number=from_number,
         to_number=to_number,
         status="in_progress",
@@ -382,20 +403,22 @@ async def handle_incoming_call(
             )
         )
 
-        # Return SWML directing SignalWire to dial Daily's SIP endpoint
+        # Return SWML directing SignalWire to connect to Daily's SIP endpoint
         sip_uri = f"sip:{room['sip_endpoint']}@sip.daily.co"
 
         swml_response = {
-            "version": "1.0.0",
-            "sections": {
-                "main": [
-                    {
-                        "dial": {
-                            "to": sip_uri
-                        }
+            "response": [
+                {
+                    "play": {
+                        "url": "say:Connecting you to our AI assistant."
                     }
-                ]
-            }
+                },
+                {
+                    "connect": {
+                        "to": sip_uri
+                    }
+                }
+            ]
         }
 
         logger.info(
@@ -410,27 +433,24 @@ async def handle_incoming_call(
 
     except Exception as e:
         logger.error(
-            "incoming_call_processing_failed",
+            "voice_session_creation_failed",
             call_id=call.id,
             error=str(e)
         )
 
-        # Return error SWML
+        # Return error SWML response
         return JSONResponse(
             content={
-                "version": "1.0.0",
-                "sections": {
-                    "main": [
-                        {
-                            "play": {
-                                "url": "say:Sorry, we're experiencing technical difficulties. Please try again later."
-                            }
-                        },
-                        {
-                            "hangup": {}
+                "response": [
+                    {
+                        "play": {
+                            "url": "say:Sorry, we're experiencing technical difficulties. Please try again later."
                         }
-                    ]
-                }
+                    },
+                    {
+                        "hangup": {}
+                    }
+                ]
             }
         )
 
