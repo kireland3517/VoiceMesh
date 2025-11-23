@@ -274,8 +274,7 @@ async def handle_incoming_call(
     """
     SignalWire Primary Script for incoming calls (SWML format).
 
-    This returns a static SWML script that uses the 'request' directive
-    to call our dynamic session creation endpoint with call variables.
+    Returns SWML using the AI connector to integrate with our voice pipeline.
 
     Configure this as your SignalWire phone number Primary Script URL:
     https://voicemesh.fly.dev/voice/incoming-call?customer_id=YOUR_CUSTOMER_ID
@@ -285,18 +284,59 @@ async def handle_incoming_call(
     """
     logger.info("swml_primary_script_requested", customer_id=customer_id)
 
-    # Return SWML that uses 'request' to create a dynamic session
-    # The request directive can pass call variables like %{call.call_id}, %{call.from}, etc.
+    # Verify customer exists
+    result = await db.execute(
+        select(Customer).where(Customer.id == customer_id)
+    )
+    customer = result.scalar_one_or_none()
+
+    if not customer:
+        logger.error("customer_not_found_in_primary_script", customer_id=customer_id)
+        return JSONResponse(
+            content={
+                "version": "1.0.0",
+                "sections": {
+                    "main": [
+                        {
+                            "play": {
+                                "url": "say:Sorry, this service is not configured. Please contact support."
+                            }
+                        },
+                        {
+                            "hangup": {}
+                        }
+                    ]
+                }
+            }
+        )
+
+    # Get system prompt from customer or use default
+    system_prompt = customer.system_prompt or "You are a helpful AI assistant. Keep your responses brief and conversational since this is a phone call."
+
+    # Return SWML with AI connector
     return JSONResponse(
         content={
             "version": "1.0.0",
             "sections": {
                 "main": [
                     {
-                        "request": {
-                            "url": f"https://voicemesh.fly.dev/voice/create-session?customer_id={customer_id}&call_id=%{{call.call_id}}&from=%{{call.from}}&to=%{{call.to}}",
-                            "method": "POST",
-                            "expected_events": ["response_received"]
+                        "ai": {
+                            "post_prompt_url": f"https://voicemesh.fly.dev/voice/ai-webhook?customer_id={customer_id}",
+                            "post_prompt_auth_user": "",
+                            "post_prompt_auth_password": "",
+                            "params": {
+                                "language": customer.default_language or "en-US",
+                                "voice": "en-US-Neural2-F"
+                            },
+                            "prompt": {
+                                "text": system_prompt
+                            },
+                            "SWAIG": {
+                                "defaults": {
+                                    "web_hook_url": f"https://voicemesh.fly.dev/voice/function-call?customer_id={customer_id}"
+                                },
+                                "functions": []
+                            }
                         }
                     }
                 ]
