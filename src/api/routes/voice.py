@@ -388,7 +388,7 @@ async def create_voice_session(
             "daily_room_created_for_call",
             call_id=call.id,
             room_url=room["url"],
-            sip_endpoint=room["sip_endpoint"]
+            sip_uri=room["sip_uri"]
         )
 
         # Start Pipecat pipeline in background
