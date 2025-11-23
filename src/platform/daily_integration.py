@@ -106,20 +106,31 @@ class DailyRoomManager:
 
                 room_data = await resp.json()
 
+            # Debug logging to see actual response structure
+            logger.info(
+                "daily_room_response_received",
+                room_data_keys=list(room_data.keys()),
+                config_keys=list(room_data.get("config", {}).keys()) if "config" in room_data else None
+            )
+
             # Create meeting token for bot
             token = await self._create_meeting_token(session, room_name)
+
+            # Daily.co SIP endpoint format: <room_name>@sip.daily.co
+            sip_endpoint = f"{room_name}@sip.daily.co"
 
             logger.info(
                 "daily_room_created",
                 room_name=room_name,
-                url=room_data["url"]
+                url=room_data["url"],
+                sip_endpoint=sip_endpoint
             )
 
             return {
                 "room_name": room_name,
                 "url": room_data["url"],
                 "token": token,
-                "sip_endpoint": room_data["config"]["sip_endpoint"],
+                "sip_endpoint": sip_endpoint,
                 "expires": room_data["config"]["exp"]
             }
 
