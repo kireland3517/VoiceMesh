@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 import structlog
 
-from src.api.database import get_db
+from src.api.database import get_db, AsyncSessionLocal
 from src.api.models import Customer, Call
 from anthropic import Anthropic
 from src.api.config import settings
@@ -395,11 +395,10 @@ async def create_voice_session(
         # Pipeline will connect to Daily room and process audio through Deepgram + Claude + Cartesia
         asyncio.create_task(
             start_voice_pipeline(
-                customer=customer,
-                call=call,
+                customer_id=customer.id,
+                call_id=call.id,
                 room_url=room["url"],
-                room_token=room["token"],
-                db=db
+                room_token=room["token"]
             )
         )
 
@@ -456,11 +455,10 @@ async def create_voice_session(
 
 
 async def start_voice_pipeline(
-    customer: Customer,
-    call: Call,
+    customer_id: str,
+    call_id: str,
     room_url: str,
-    room_token: str,
-    db: AsyncSession
+    room_token: str
 ):
     """
     Start the Pipecat voice pipeline for a call.
@@ -469,80 +467,106 @@ async def start_voice_pipeline(
     Audio flows through: Daily → Deepgram STT → Claude LLM → Cartesia TTS → Daily
 
     Args:
-        customer: Customer making the call
-        call: Call record
+        customer_id: ID of the customer making the call
+        call_id: ID of the call record
         room_url: Daily.co room URL
         room_token: Bot token for Daily room
-        db: Database session
     """
-    try:
-        logger.info(
-            "starting_voice_pipeline",
-            call_id=call.id,
-            customer_id=customer.id
-        )
+    # Create a new database session for this background task
+    async with AsyncSessionLocal() as db:
+        try:
+            # Load customer and call objects from database
+            customer_result = await db.execute(select(Customer).where(Customer.id == customer_id))
+            customer = customer_result.scalar_one_or_none()
 
-        # Create and configure pipeline with customer settings
-        # Get voice config from customer or use defaults
-        voice_config = customer.voice_config or {}
+            call_result = await db.execute(select(Call).where(Call.id == call_id))
+            call = call_result.scalar_one_or_none()
 
-        pipeline = VoiceMeshPipeline(
-            customer=customer,
-            deepgram_config={
-                "model": "nova-2",
-                "language": customer.default_language or "en",
-                "smart_format": True,
-                "punctuate": True
-            },
-            cartesia_config={
-                "voice_id": voice_config.get("voice_id", "a0e99841-438c-4a64-b679-ae501e7d6091"),  # Default: Barbershop Man
-                "speed": voice_config.get("speed", 0.9),  # Slower = more natural
-                "emotion": voice_config.get("emotion")
-            }
-        )
-
-        # Set up pipeline with Daily transport
-        await pipeline.setup_pipeline(
-            room_url=room_url,
-            token=room_token,
-            bot_name="VoiceMesh AI"
-        )
-
-        # Start pipeline (blocks until call ends)
-        await pipeline.start()
-
-        logger.info(
-            "voice_pipeline_completed",
-            call_id=call.id
-        )
-
-        # Update call status
-        call.status = "completed"
-        await db.commit()
-
-    except Exception as e:
-        logger.error(
-            "voice_pipeline_failed",
-            call_id=call.id,
-            error=str(e)
-        )
-
-        # Update call status to failed
-        call.status = "failed"
-        await db.commit()
-
-    finally:
-        # Clean up Daily room
-        if daily_manager:
-            try:
-                room_name = f"voicemesh-{call.id}"
-                await daily_manager.delete_room(room_name)
-            except Exception as e:
-                logger.warning(
-                    "daily_room_cleanup_failed",
-                    call_id=call.id,
-                    error=str(e)
+            if not customer or not call:
+                logger.error(
+                    "voice_pipeline_objects_not_found",
+                    customer_id=customer_id,
+                    call_id=call_id,
+                    customer_found=customer is not None,
+                    call_found=call is not None
                 )
+                return
+
+            logger.info(
+                "starting_voice_pipeline",
+                call_id=call.id,
+                customer_id=customer.id
+            )
+
+            # Create and configure pipeline with customer settings
+            # Get voice config from customer or use defaults (use getattr for backward compatibility)
+            voice_config = getattr(customer, 'voice_config', None) or {}
+
+            pipeline = VoiceMeshPipeline(
+                customer=customer,
+                deepgram_config={
+                    "model": "nova-2",
+                    "language": customer.default_language or "en",
+                    "smart_format": True,
+                    "punctuate": True
+                },
+                cartesia_config={
+                    "voice_id": voice_config.get("voice_id", "a0e99841-438c-4a64-b679-ae501e7d6091"),  # Default: Barbershop Man
+                    "speed": voice_config.get("speed", 0.9),  # Slower = more natural
+                    "emotion": voice_config.get("emotion")
+                }
+            )
+
+            # Set up pipeline with Daily transport
+            await pipeline.setup_pipeline(
+                room_url=room_url,
+                token=room_token,
+                bot_name="VoiceMesh AI"
+            )
+
+            # Start pipeline (blocks until call ends)
+            await pipeline.start()
+
+            logger.info(
+                "voice_pipeline_completed",
+                call_id=call.id
+            )
+
+            # Update call status
+            call.status = "completed"
+            await db.commit()
+
+        except Exception as e:
+            logger.error(
+                "voice_pipeline_failed",
+                call_id=call_id,
+                error=str(e)
+            )
+
+            # Update call status to failed if we have the call object
+            try:
+                if call:
+                    call.status = "failed"
+                    await db.commit()
+            except Exception as commit_error:
+                logger.error(
+                    "failed_to_update_call_status",
+                    call_id=call_id,
+                    error=str(commit_error)
+                )
+
+        finally:
+            # Clean up Daily room
+            if daily_manager:
+                try:
+                    room_name = f"voicemesh-{call_id}"
+                    await daily_manager.delete_room(room_name)
+                except Exception as e:
+                    logger.warning(
+                        "daily_room_cleanup_failed",
+                        call_id=call_id,
+                        error=str(e)
+                    )
 
 
 @router.post("/process-speech")
