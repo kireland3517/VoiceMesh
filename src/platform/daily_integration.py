@@ -1,5 +1,6 @@
 """Daily.co integration for SignalWire → Pipecat bridge."""
 
+import time
 import aiohttp
 from typing import Dict, Any, Optional
 import structlog
@@ -78,7 +79,7 @@ class DailyRoomManager:
                     "name": room_name,
                     "privacy": "private",
                     "properties": {
-                        "exp": int((60 * 60) + 3600),  # 1 hour expiry
+                        "exp": int(time.time() + 3600),  # Expire 1 hour from now (Unix timestamp)
                         "enable_chat": False,
                         "enable_screenshare": False,
                         "enable_knocking": False,
