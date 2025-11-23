@@ -206,8 +206,9 @@ class VoiceMeshPipeline:
             System prompt for Claude
         """
         # Use customer's custom system prompt if configured
-        if self.customer.system_prompt:
-            return self.customer.system_prompt
+        system_prompt = getattr(self.customer, 'system_prompt', None)
+        if system_prompt:
+            return system_prompt
 
         # Otherwise, use default prompt
         prompt = f"""You are a helpful AI assistant for {self.customer.name}.
