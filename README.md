@@ -169,6 +169,13 @@ cp .env.example .env
 uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8080
 ```
 
+### MCP Connector (Fly.io Ops)
+
+- Endpoint: the MCP server is mounted at `/mcp` on the same FastAPI host (e.g., `https://your-app.fly.dev/mcp`).
+- Auth: set `FLY_API_TOKEN` in your environment or Fly secret; optionally set `FLY_APP_NAME` to avoid passing the app name in every call.
+- Tools: `get_app_overview`, `list_machines`, and `get_recent_logs` (limit + region filters) all return structured JSON.
+- Connector form: Name it something like "VoiceMesh Fly Ops", add a short description ("Inspect Fly.io app status, machines, and logs"), use the `/mcp` URL, and select "None" auth unless you add OAuth later.
+
 ### Docker Setup (Recommended)
 
 ```bash

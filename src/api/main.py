@@ -8,6 +8,7 @@ import structlog
 from src.api.config import settings
 from src.api.database import init_db, close_db
 from src.api.routes import customers, voice, voice_config
+from src.api.mcp_server import mcp_asgi_app
 
 # Configure structured logging
 structlog.configure(
@@ -42,6 +43,7 @@ app.add_middleware(
 app.include_router(customers.router)
 app.include_router(voice.router)
 app.include_router(voice_config.router)
+app.mount("/mcp", mcp_asgi_app)
 
 
 @app.on_event("startup")

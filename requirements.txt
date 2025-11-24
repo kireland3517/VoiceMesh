@@ -31,7 +31,7 @@ redis==5.0.1
 hiredis==2.3.2
 
 # HTTP Client
-httpx==0.26.0
+httpx==0.28.1
 aiohttp==3.10.10
 
 # WebSocket
@@ -71,7 +71,7 @@ celery[redis]==5.3.6
 pytest==7.4.4
 pytest-asyncio==0.23.3
 pytest-cov==4.1.0
-httpx==0.26.0
+httpx==0.28.1
 
 # Code Quality (dev dependencies)
 black==24.1.1
@@ -82,6 +82,9 @@ pre-commit==3.6.0
 # CRM Integrations
 simple-salesforce==1.12.5
 requests==2.31.0
+
+# Model Context Protocol (MCP)
+mcp==1.22.0
 
 # Utilities
 python-dateutil==2.8.2

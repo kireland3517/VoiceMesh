@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     ENV: str = "development"
     LOG_LEVEL: str = "INFO"
     PORT: int = 8080
+    FLY_API_TOKEN: Optional[str] = None
+    FLY_APP_NAME: Optional[str] = None
+    FLY_REGION: Optional[str] = None
+    FLY_PRIMARY_REGION: Optional[str] = None
 
     # Database
     DATABASE_URL: str = ""
