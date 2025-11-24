@@ -5,6 +5,7 @@ pydantic==2.10.3
 python-dotenv==1.0.1
 websockets==13.1
 python-multipart==0.0.18
+aiohttp==3.10.10
 
 # Anthropic SDK for Claude streaming
 anthropic==0.39.*
