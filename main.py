@@ -274,6 +274,33 @@ async def voice_agent_websocket(
     await proxy_to_deepgram(websocket, config)
 
 
+@app.websocket("/agent/signalwire")
+async def signalwire_voice_agent(websocket: WebSocket):
+    """
+    Dedicated WebSocket endpoint for SignalWire Media Streams.
+
+    Pre-configured with Leslie's settings since SignalWire doesn't support
+    query parameters in Stream URLs.
+    """
+    await websocket.accept()
+    print(f"SignalWire call connected")
+
+    # Leslie's configuration (hard-coded for SignalWire)
+    config = AgentConfig(
+        agent_name="leslie",
+        system_prompt="You are a friendly and helpful customer support agent for Senior Life Insurance. Your name is Leslie, and you speak in a warm, polite manner. Assist callers with their life insurance questions or requests, providing clear and empathetic responses.",
+        greeting="Thank you for calling senior life insurance, my name is Leslie. For quality purposes this call may be recorded, may I get your first name?",
+        voice_model="aura-2-andromeda-en",
+        llm_model="claude-4-5-haiku-latest",
+        llm_temperature=0.7,
+        stt_model="flux-general-en",
+        language="en"
+    )
+
+    # Proxy the connection
+    await proxy_to_deepgram(websocket, config)
+
+
 @app.post("/signalwire/incoming")
 async def signalwire_incoming_call(request: Request):
     """
@@ -297,20 +324,16 @@ async def signalwire_incoming_call(request: Request):
     if base_url.endswith("/"):
         base_url = base_url[:-1]
 
-    # Build WebSocket URL with Leslie configuration
-    ws_url = (
-        f"{base_url}/agent?"
-        f"agent_name=leslie&"
-        f"system_prompt=You+are+a+friendly+and+helpful+customer+support+agent+for+Senior+Life+Insurance.+Your+name+is+Leslie,+and+you+speak+in+a+warm,+polite+manner.+Assist+callers+with+their+life+insurance+questions+or+requests,+providing+clear+and+empathetic+responses.&"
-        f"greeting=Thank+you+for+calling+senior+life+insurance,+my+name+is+Leslie.+For+quality+purposes+this+call+may+be+recorded,+may+I+get+your+first+name?&"
-        f"voice_model=aura-2-andromeda-en"
-    )
+    # Build WebSocket URL - SignalWire doesn't support query parameters in Stream URL!
+    ws_url = f"{base_url}/agent/signalwire"
 
     # Return TwiML that connects to our WebSocket
+    # Note: SignalWire doesn't support query params in Stream URL,
+    # so we'll use a dedicated endpoint with Leslie config
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Connect>
-        <Stream url="{ws_url}">
+        <Stream url="{ws_url}" codec="L16@24000h">
             <Parameter name="caller" value="{caller}" />
             <Parameter name="called" value="{called}" />
             <Parameter name="call_sid" value="{call_sid}" />
