@@ -127,12 +127,7 @@ class SignalWireMediaBridge:
         # Connect to Deepgram STT
         await self.setup_deepgram_stt()
 
-        # Send greeting if provided
-        if self.greeting:
-            print(f"👋 Sending greeting...")
-            await self.speak(self.greeting)
-
-        # Start listening to SignalWire messages
+        # Start listening to SignalWire messages (greeting will be sent after "start" event)
         await self.listen_to_signalwire()
 
     async def setup_deepgram_stt(self):
@@ -182,6 +177,11 @@ class SignalWireMediaBridge:
                 elif event == "start":
                     print(f"▶️  Call started: {data}")
                     self.stream_sid = data.get("streamSid")
+
+                    # Send greeting now that we have stream_sid
+                    if self.greeting:
+                        print(f"👋 Sending greeting...")
+                        await self.speak(self.greeting)
 
                 elif event == "media":
                     # Decode base64 mulaw audio
