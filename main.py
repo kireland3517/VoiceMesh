@@ -20,7 +20,8 @@ load_dotenv()
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 DEEPGRAM_AGENT_WS_URL = "wss://agent.deepgram.com/agent"
-DEEPGRAM_TTS_WS_URL = "wss://api.deepgram.com/v1/speak?encoding=mulaw&sample_rate=8000&container=none"
+# SignalWire uses L16 @ 24kHz, so configure Deepgram TTS to match
+DEEPGRAM_TTS_WS_URL = "wss://api.deepgram.com/v1/speak?encoding=linear16&sample_rate=24000&container=none"
 
 if not DEEPGRAM_API_KEY:
     print("WARNING: DEEPGRAM_API_KEY not set")
@@ -77,11 +78,11 @@ class SignalWireMediaBridge:
     Bridge between SignalWire Media Streams and Deepgram STT + Claude + Deepgram TTS.
 
     SignalWire Protocol:
-    - Receives JSON messages with base64 mulaw audio @ 8kHz
-    - Sends JSON messages with base64 mulaw audio @ 8kHz
+    - Receives JSON messages with base64 linear16 audio @ 24kHz
+    - Sends JSON messages with base64 linear16 audio @ 24kHz
 
     Deepgram STT:
-    - Receives raw mulaw audio @ 8kHz (no conversion needed!)
+    - Receives raw linear16 audio @ 24kHz (no conversion needed!)
     - Returns transcriptions via events
 
     Claude:
@@ -90,7 +91,7 @@ class SignalWireMediaBridge:
 
     Deepgram TTS:
     - Receives text chunks via WebSocket
-    - Returns raw mulaw audio @ 8kHz
+    - Returns raw linear16 audio @ 24kHz
     - Encoded to base64 and sent to SignalWire
     """
 
@@ -136,13 +137,14 @@ class SignalWireMediaBridge:
         """Connect to Deepgram STT via WebSocket"""
         try:
             # Build STT WebSocket URL with parameters
+            # SignalWire sends L16 @ 24kHz, so configure STT to match
             stt_url = (
                 "wss://api.deepgram.com/v1/listen"
                 "?model=nova-2-phonecall"
                 "&language=en"
                 "&smart_format=true"
-                "&encoding=mulaw"
-                "&sample_rate=8000"
+                "&encoding=linear16"
+                "&sample_rate=24000"
                 "&channels=1"
                 "&interim_results=true"
                 "&endpointing=300"
