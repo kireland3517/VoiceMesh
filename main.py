@@ -164,7 +164,7 @@ class SignalWireMediaBridge:
             print("✅ Deepgram STT connected")
 
             # Send initial silent frame to prevent timeout
-            silent_frame = bytes(320)  # 160 samples * 2 bytes = 320 bytes of silence
+            silent_frame = bytes(960)  # 480 samples * 2 bytes = 960 bytes (20ms @ 24kHz)
             await self.stt_ws.send(silent_frame)
 
             # Start task to listen for transcriptions
@@ -204,7 +204,7 @@ class SignalWireMediaBridge:
 
                     try:
                         # Send single silent frame
-                        silence = bytes(320)  # 20ms of silence
+                        silence = bytes(960)  # 480 samples * 2 bytes = 960 bytes (20ms @ 24kHz)
                         payload = base64.b64encode(silence).decode('utf-8')
 
                         await self.signalwire_ws.send_json({
@@ -393,7 +393,7 @@ class SignalWireMediaBridge:
                     self.speaking = True
 
                     # Send audio to SignalWire in chunks
-                    chunk_size = 160 * 2  # 160 samples * 2 bytes (16-bit PCM)
+                    chunk_size = 480 * 2  # 480 samples * 2 bytes = 960 bytes (20ms @ 24kHz)
                     for i in range(0, len(audio_bytes), chunk_size):
                         if not self.speaking:
                             break
@@ -435,7 +435,7 @@ class SignalWireMediaBridge:
     async def send_silence(self, duration_ms: int):
         """Send silent PCM16 frames to keep SignalWire connection alive"""
         try:
-            chunk_size = 160 * 2  # 160 samples * 2 bytes (16-bit PCM) = 20ms @ 24kHz
+            chunk_size = 480 * 2  # 480 samples * 2 bytes = 960 bytes (20ms @ 24kHz)
             num_chunks = duration_ms // 20  # 20ms per chunk
 
             for _ in range(num_chunks):
