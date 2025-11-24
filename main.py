@@ -198,6 +198,8 @@ class SignalWireMediaBridge:
                     # Send greeting now that we have stream_sid
                     if self.greeting:
                         print(f"👋 Sending greeting...")
+                        # Send brief silence first to keep connection alive
+                        await self.send_silence(duration_ms=100)
                         asyncio.create_task(self.speak(self.greeting))
 
                 elif event == "media":
@@ -382,6 +384,29 @@ class SignalWireMediaBridge:
         except Exception as e:
             print(f"❌ Error in speak: {e}")
             self.speaking = False
+
+    async def send_silence(self, duration_ms: int):
+        """Send silent PCM16 frames to keep SignalWire connection alive"""
+        try:
+            chunk_size = 160 * 2  # 160 samples * 2 bytes (16-bit PCM) = 20ms @ 24kHz
+            num_chunks = duration_ms // 20  # 20ms per chunk
+
+            for _ in range(num_chunks):
+                silence = bytes(chunk_size)  # All zeros = silence
+                payload = base64.b64encode(silence).decode('utf-8')
+
+                try:
+                    await self.signalwire_ws.send_json({
+                        "event": "media",
+                        "streamSid": self.stream_sid,
+                        "media": {"payload": payload}
+                    })
+                    await asyncio.sleep(0.020)  # 20ms per chunk
+                except Exception as e:
+                    print(f"⚠️  Could not send silence: {e}")
+                    break
+        except Exception as e:
+            print(f"❌ Error in send_silence: {e}")
 
     async def clear_audio(self):
         """Clear audio buffer (barge-in)"""
