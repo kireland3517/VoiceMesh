@@ -142,14 +142,14 @@ class SignalWireMediaBridge:
         """Connect to Deepgram STT via WebSocket"""
         try:
             # Build STT WebSocket URL with parameters
-            # SignalWire sends mulaw @ 8kHz (default), so configure STT to match
+            # SignalWire sends L16 @ 24kHz with codec="L16@24000h" in CXML
             stt_url = (
                 "wss://api.deepgram.com/v1/listen"
                 "?model=nova-2-phonecall"
                 "&language=en"
                 "&smart_format=true"
-                "&encoding=mulaw"
-                "&sample_rate=8000"
+                "&encoding=linear16"
+                "&sample_rate=24000"
                 "&channels=1"
                 "&interim_results=true"
                 "&endpointing=300"
@@ -164,7 +164,7 @@ class SignalWireMediaBridge:
             print("✅ Deepgram STT connected")
 
             # Send initial silent frame to prevent timeout
-            silent_frame = bytes(160)  # 160 samples = 160 bytes (20ms mulaw @ 8kHz)
+            silent_frame = bytes(960)  # 480 samples * 2 bytes = 960 bytes (20ms L16 @ 24kHz)
             await self.stt_ws.send(silent_frame)
 
             # Start task to listen for transcriptions
@@ -203,8 +203,8 @@ class SignalWireMediaBridge:
                         break
 
                     try:
-                        # Send single silent frame (mulaw @ 8kHz)
-                        silence = bytes(160)  # 160 samples = 160 bytes (20ms mulaw @ 8kHz)
+                        # Send single silent frame (L16 @ 24kHz)
+                        silence = bytes(960)  # 480 samples * 2 bytes = 960 bytes (20ms L16 @ 24kHz)
                         payload = base64.b64encode(silence).decode('utf-8')
 
                         await self.signalwire_ws.send_json({
@@ -359,7 +359,7 @@ class SignalWireMediaBridge:
         """Send text to Cartesia TTS via HTTP and play to caller"""
         try:
             # Build Cartesia TTS request
-            # Note: Cartesia returns PCM16, we need to convert to mulaw @ 8kHz
+            # SignalWire expects L16 @ 24kHz (PCM16)
             tts_request = {
                 "model_id": "sonic-english",
                 "transcript": text,
@@ -369,8 +369,8 @@ class SignalWireMediaBridge:
                 },
                 "output_format": {
                     "container": "raw",
-                    "encoding": "pcm_mulaw",
-                    "sample_rate": 8000
+                    "encoding": "pcm_s16le",
+                    "sample_rate": 24000
                 }
             }
 
@@ -393,8 +393,8 @@ class SignalWireMediaBridge:
                     # Now we're actually speaking - set flag to stop keep-alive
                     self.speaking = True
 
-                    # Send audio to SignalWire in chunks (mulaw @ 8kHz)
-                    chunk_size = 160  # 160 samples = 160 bytes (20ms mulaw @ 8kHz)
+                    # Send audio to SignalWire in chunks (L16 @ 24kHz)
+                    chunk_size = 960  # 480 samples * 2 bytes = 960 bytes (20ms L16 @ 24kHz)
                     for i in range(0, len(audio_bytes), chunk_size):
                         if not self.speaking:
                             break
@@ -434,9 +434,9 @@ class SignalWireMediaBridge:
             self.speaking = False
 
     async def send_silence(self, duration_ms: int):
-        """Send silent mulaw frames to keep SignalWire connection alive"""
+        """Send silent L16 frames to keep SignalWire connection alive"""
         try:
-            chunk_size = 160  # 160 samples = 160 bytes (20ms mulaw @ 8kHz)
+            chunk_size = 960  # 480 samples * 2 bytes = 960 bytes (20ms L16 @ 24kHz)
             num_chunks = duration_ms // 20  # 20ms per chunk
 
             for _ in range(num_chunks):
