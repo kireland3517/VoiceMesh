@@ -19,9 +19,11 @@ load_dotenv()
 # Configuration
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY", DEEPGRAM_API_KEY)  # Use Deepgram key as fallback
 DEEPGRAM_AGENT_WS_URL = "wss://agent.deepgram.com/agent"
-# SignalWire uses L16 @ 24kHz, so configure Deepgram TTS to match
-DEEPGRAM_TTS_WS_URL = "wss://api.deepgram.com/v1/speak?encoding=linear16&sample_rate=24000&container=none"
+# Cartesia TTS WebSocket - using raw PCM16 @ 24kHz to match SignalWire
+CARTESIA_TTS_WS_URL = "wss://api.cartesia.ai/tts/websocket"
+CARTESIA_VOICE_ID = "694f9389-aac1-45b6-b726-9d9369183238"
 
 if not DEEPGRAM_API_KEY:
     print("WARNING: DEEPGRAM_API_KEY not set")
@@ -75,7 +77,7 @@ class AgentConfig(BaseModel):
 
 class SignalWireMediaBridge:
     """
-    Bridge between SignalWire Media Streams and Deepgram STT + Claude + Deepgram TTS.
+    Bridge between SignalWire Media Streams and Deepgram STT + Claude + Cartesia TTS.
 
     SignalWire Protocol:
     - Receives JSON messages with base64 linear16 audio @ 24kHz
@@ -89,17 +91,16 @@ class SignalWireMediaBridge:
     - Receives transcriptions
     - Returns streaming text responses
 
-    Deepgram TTS:
+    Cartesia TTS:
     - Receives text chunks via WebSocket
-    - Returns raw linear16 audio @ 24kHz
+    - Returns raw PCM16 audio @ 24kHz with southern accent
     - Encoded to base64 and sent to SignalWire
     """
 
-    def __init__(self, signalwire_ws: WebSocket, system_prompt: str, greeting: str, voice_model: str):
+    def __init__(self, signalwire_ws: WebSocket, system_prompt: str, greeting: str):
         self.signalwire_ws = signalwire_ws
         self.system_prompt = system_prompt
         self.greeting = greeting
-        self.voice_model = voice_model
 
         # State
         self.stream_sid = None
@@ -109,8 +110,9 @@ class SignalWireMediaBridge:
         # Deepgram STT WebSocket
         self.stt_ws = None
 
-        # Deepgram TTS WebSocket
+        # Cartesia TTS WebSocket
         self.tts_ws = None
+        self.context_id = None  # Cartesia context for streaming
 
         # Transcript accumulation
         self.is_finals = []
@@ -122,8 +124,8 @@ class SignalWireMediaBridge:
         # Connect to Deepgram STT
         await self.setup_deepgram_stt()
 
-        # Connect to Deepgram TTS
-        await self.setup_deepgram_tts()
+        # Connect to Cartesia TTS
+        await self.setup_cartesia_tts()
 
         # Send greeting if provided
         if self.greeting:
@@ -165,25 +167,26 @@ class SignalWireMediaBridge:
             print(f"❌ Failed to connect to Deepgram STT: {e}")
             raise
 
-    async def setup_deepgram_tts(self):
-        """Connect to Deepgram TTS WebSocket"""
+    async def setup_cartesia_tts(self):
+        """Connect to Cartesia TTS WebSocket"""
         try:
             extra_headers = {
-                "Authorization": f"Token {DEEPGRAM_API_KEY}"
+                "X-API-Key": CARTESIA_API_KEY,
+                "Cartesia-Version": "2024-06-10"
             }
 
             self.tts_ws = await websockets.connect(
-                DEEPGRAM_TTS_WS_URL,
+                CARTESIA_TTS_WS_URL,
                 extra_headers=extra_headers
             )
 
-            print("✅ Deepgram TTS connected")
+            print("✅ Cartesia TTS connected")
 
             # Start task to listen for TTS audio
             asyncio.create_task(self.listen_to_tts())
 
         except Exception as e:
-            print(f"❌ Failed to connect to Deepgram TTS: {e}")
+            print(f"❌ Failed to connect to Cartesia TTS: {e}")
             raise
 
     async def listen_to_signalwire(self):
@@ -229,7 +232,7 @@ class SignalWireMediaBridge:
             await self.cleanup()
 
     async def listen_to_tts(self):
-        """Listen for audio from Deepgram TTS"""
+        """Listen for audio from Cartesia TTS"""
         try:
             async for message in self.tts_ws:
                 # Check if it's bytes (audio) or text (JSON metadata)
@@ -251,7 +254,12 @@ class SignalWireMediaBridge:
                     # Text message - parse as JSON metadata
                     try:
                         json_data = json.loads(message)
-                        print(f"🎙️  TTS metadata: {json_data}")
+
+                        # Store context_id for subsequent requests
+                        if "context_id" in json_data:
+                            self.context_id = json_data["context_id"]
+
+                        print(f"🎙️  Cartesia TTS: {json_data.get('type', 'message')}")
                     except json.JSONDecodeError:
                         print(f"⚠️  Unexpected text message: {message}")
 
@@ -331,11 +339,25 @@ class SignalWireMediaBridge:
                     print(text, end="", flush=True)
                     assistant_response += text
 
-                    # Send each chunk to TTS
+                    # Send each chunk to Cartesia TTS
                     if self.tts_ws and self.speaking:
                         await self.tts_ws.send(json.dumps({
-                            "type": "Speak",
-                            "text": text
+                            "model_id": "sonic-english",
+                            "transcript": text,
+                            "voice": {
+                                "mode": "id",
+                                "id": CARTESIA_VOICE_ID,
+                                "__experimental_controls": {
+                                    "accent": "southern"
+                                }
+                            },
+                            "output_format": {
+                                "container": "raw",
+                                "encoding": "pcm_s16le",
+                                "sample_rate": 24000
+                            },
+                            "context_id": self.context_id,
+                            "continue": True
                         }))
 
             print()  # New line after response
@@ -346,28 +368,41 @@ class SignalWireMediaBridge:
                 "content": assistant_response
             })
 
-            # Flush TTS (tell it we're done)
-            if self.tts_ws:
-                await self.tts_ws.send(json.dumps({"type": "Flush"}))
+            # Flush TTS (tell it we're done with this utterance)
+            if self.tts_ws and self.context_id:
+                await self.tts_ws.send(json.dumps({
+                    "context_id": self.context_id,
+                    "continue": False
+                }))
 
         except Exception as e:
             print(f"❌ Error getting Claude response: {e}")
             self.speaking = False
 
     async def speak(self, text: str):
-        """Send text to TTS and play to caller"""
+        """Send text to Cartesia TTS and play to caller"""
         try:
             self.speaking = True
 
             if self.tts_ws:
-                # Send text to TTS
+                # Send text to Cartesia TTS
                 await self.tts_ws.send(json.dumps({
-                    "type": "Speak",
-                    "text": text
+                    "model_id": "sonic-english",
+                    "transcript": text,
+                    "voice": {
+                        "mode": "id",
+                        "id": CARTESIA_VOICE_ID,
+                        "__experimental_controls": {
+                            "accent": "southern"
+                        }
+                    },
+                    "output_format": {
+                        "container": "raw",
+                        "encoding": "pcm_s16le",
+                        "sample_rate": 24000
+                    },
+                    "context_id": self.context_id
                 }))
-
-                # Flush
-                await self.tts_ws.send(json.dumps({"type": "Flush"}))
 
         except Exception as e:
             print(f"❌ Error in speak: {e}")
@@ -384,9 +419,13 @@ class SignalWireMediaBridge:
                 "streamSid": self.stream_sid
             })
 
-        # Clear TTS buffer
-        if self.tts_ws:
-            await self.tts_ws.send(json.dumps({"type": "Clear"}))
+        # Cancel current Cartesia TTS context
+        if self.tts_ws and self.context_id:
+            await self.tts_ws.send(json.dumps({
+                "context_id": self.context_id,
+                "cancel": True
+            }))
+            self.context_id = None  # Reset context
 
     async def cleanup(self):
         """Clean up connections"""
@@ -632,8 +671,7 @@ async def signalwire_voice_agent(websocket: WebSocket):
     bridge = SignalWireMediaBridge(
         signalwire_ws=websocket,
         system_prompt="You are Caroline, a warm and friendly customer support agent for Senior Life Insurance with a charming Southern personality. Speak naturally with Southern expressions like 'y'all', 'honey', 'sweetie', 'bless your heart', and 'darlin'' when appropriate. Be genuinely helpful and empathetic while maintaining that warm Southern hospitality. Keep responses conversational and friendly.",
-        greeting="Well hello there! Thank you for calling Senior Life Insurance, my name is Caroline. For quality purposes, this call may be recorded. May I get your first name, honey?",
-        voice_model="aura-athena-en"  # Clear, confident female voice
+        greeting="Well hello there! Thank you for calling Senior Life Insurance, my name is Caroline. For quality purposes, this call may be recorded. May I get your first name, honey?"
     )
 
     try:
