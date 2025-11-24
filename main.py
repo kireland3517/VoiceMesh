@@ -142,14 +142,14 @@ class SignalWireMediaBridge:
         """Connect to Deepgram STT via WebSocket"""
         try:
             # Build STT WebSocket URL with parameters
-            # SignalWire sends L16 @ 24kHz, so configure STT to match
+            # SignalWire sends mulaw @ 8kHz (default), so configure STT to match
             stt_url = (
                 "wss://api.deepgram.com/v1/listen"
                 "?model=nova-2-phonecall"
                 "&language=en"
                 "&smart_format=true"
-                "&encoding=linear16"
-                "&sample_rate=24000"
+                "&encoding=mulaw"
+                "&sample_rate=8000"
                 "&channels=1"
                 "&interim_results=true"
                 "&endpointing=300"
@@ -164,7 +164,7 @@ class SignalWireMediaBridge:
             print("✅ Deepgram STT connected")
 
             # Send initial silent frame to prevent timeout
-            silent_frame = bytes(960)  # 480 samples * 2 bytes = 960 bytes (20ms @ 24kHz)
+            silent_frame = bytes(160)  # 160 samples = 160 bytes (20ms mulaw @ 8kHz)
             await self.stt_ws.send(silent_frame)
 
             # Start task to listen for transcriptions
@@ -203,8 +203,8 @@ class SignalWireMediaBridge:
                         break
 
                     try:
-                        # Send single silent frame
-                        silence = bytes(960)  # 480 samples * 2 bytes = 960 bytes (20ms @ 24kHz)
+                        # Send single silent frame (mulaw @ 8kHz)
+                        silence = bytes(160)  # 160 samples = 160 bytes (20ms mulaw @ 8kHz)
                         payload = base64.b64encode(silence).decode('utf-8')
 
                         await self.signalwire_ws.send_json({
@@ -359,6 +359,7 @@ class SignalWireMediaBridge:
         """Send text to Cartesia TTS via HTTP and play to caller"""
         try:
             # Build Cartesia TTS request
+            # Note: Cartesia returns PCM16, we need to convert to mulaw @ 8kHz
             tts_request = {
                 "model_id": "sonic-english",
                 "transcript": text,
@@ -368,8 +369,8 @@ class SignalWireMediaBridge:
                 },
                 "output_format": {
                     "container": "raw",
-                    "encoding": "pcm_s16le",
-                    "sample_rate": 24000
+                    "encoding": "pcm_mulaw",
+                    "sample_rate": 8000
                 }
             }
 
@@ -392,8 +393,8 @@ class SignalWireMediaBridge:
                     # Now we're actually speaking - set flag to stop keep-alive
                     self.speaking = True
 
-                    # Send audio to SignalWire in chunks
-                    chunk_size = 480 * 2  # 480 samples * 2 bytes = 960 bytes (20ms @ 24kHz)
+                    # Send audio to SignalWire in chunks (mulaw @ 8kHz)
+                    chunk_size = 160  # 160 samples = 160 bytes (20ms mulaw @ 8kHz)
                     for i in range(0, len(audio_bytes), chunk_size):
                         if not self.speaking:
                             break
@@ -433,9 +434,9 @@ class SignalWireMediaBridge:
             self.speaking = False
 
     async def send_silence(self, duration_ms: int):
-        """Send silent PCM16 frames to keep SignalWire connection alive"""
+        """Send silent mulaw frames to keep SignalWire connection alive"""
         try:
-            chunk_size = 480 * 2  # 480 samples * 2 bytes = 960 bytes (20ms @ 24kHz)
+            chunk_size = 160  # 160 samples = 160 bytes (20ms mulaw @ 8kHz)
             num_chunks = duration_ms // 20  # 20ms per chunk
 
             for _ in range(num_chunks):
@@ -764,12 +765,11 @@ async def signalwire_incoming_call(request: Request):
     ws_url = f"{base_url}/agent/signalwire"
 
     # Return TwiML that connects to our WebSocket
-    # Note: SignalWire doesn't support query params in Stream URL,
-    # so we'll use a dedicated endpoint with Leslie config
+    # Use mulaw @ 8kHz (SignalWire default) for better compatibility
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Connect>
-        <Stream url="{ws_url}" codec="L16@24000h">
+        <Stream url="{ws_url}">
             <Parameter name="caller" value="{caller}" />
             <Parameter name="called" value="{called}" />
             <Parameter name="call_sid" value="{call_sid}" />
