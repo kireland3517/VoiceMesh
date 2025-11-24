@@ -230,29 +230,28 @@ class SignalWireMediaBridge:
         """Listen for audio from Deepgram TTS"""
         try:
             async for message in self.tts_ws:
-                # Check if it's JSON (metadata) or binary (audio)
-                try:
-                    # Try parsing as JSON
-                    json_data = json.loads(message)
-                    print(f"🎙️  TTS metadata: {json_data}")
-                    continue
-                except (json.JSONDecodeError, TypeError):
-                    # It's binary audio data
-                    pass
+                # Check if it's bytes (audio) or text (JSON metadata)
+                if isinstance(message, bytes):
+                    # Binary audio data - send to SignalWire if speaking
+                    if self.speaking:
+                        # Encode to base64
+                        payload = base64.b64encode(message).decode('utf-8')
 
-                # Only send audio if we're speaking
-                if self.speaking and isinstance(message, bytes):
-                    # Encode to base64
-                    payload = base64.b64encode(message).decode('utf-8')
-
-                    # Send to SignalWire
-                    await self.signalwire_ws.send_json({
-                        "event": "media",
-                        "streamSid": self.stream_sid,
-                        "media": {
-                            "payload": payload
-                        }
-                    })
+                        # Send to SignalWire
+                        await self.signalwire_ws.send_json({
+                            "event": "media",
+                            "streamSid": self.stream_sid,
+                            "media": {
+                                "payload": payload
+                            }
+                        })
+                else:
+                    # Text message - parse as JSON metadata
+                    try:
+                        json_data = json.loads(message)
+                        print(f"🎙️  TTS metadata: {json_data}")
+                    except json.JSONDecodeError:
+                        print(f"⚠️  Unexpected text message: {message}")
 
         except Exception as e:
             print(f"❌ Error in TTS listener: {e}")
