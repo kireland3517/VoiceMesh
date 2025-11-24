@@ -410,6 +410,9 @@ class SignalWireMediaBridge:
                 if self.context_id:
                     tts_request["context_id"] = self.context_id
 
+                # Debug: log what we're sending
+                print(f"🔍 Sending to Cartesia: {json.dumps(tts_request, indent=2)}")
+
                 # Send text to Cartesia TTS
                 await self.tts_ws.send(json.dumps(tts_request))
 
