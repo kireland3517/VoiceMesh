@@ -346,10 +346,7 @@ class SignalWireMediaBridge:
                             "transcript": text,
                             "voice": {
                                 "mode": "id",
-                                "id": CARTESIA_VOICE_ID,
-                                "__experimental_controls": {
-                                    "accent": "southern"
-                                }
+                                "id": CARTESIA_VOICE_ID
                             },
                             "output_format": {
                                 "container": "raw",
@@ -391,10 +388,7 @@ class SignalWireMediaBridge:
                     "transcript": text,
                     "voice": {
                         "mode": "id",
-                        "id": CARTESIA_VOICE_ID,
-                        "__experimental_controls": {
-                            "accent": "southern"
-                        }
+                        "id": CARTESIA_VOICE_ID
                     },
                     "output_format": {
                         "container": "raw",
