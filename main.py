@@ -237,10 +237,10 @@ class SignalWireMediaBridge:
                     # Send greeting now that we have stream_sid
                     if self.greeting:
                         print(f"👋 Sending greeting...")
-                        # Send brief silence first to keep connection alive
+                        # Send brief silence first to prime the audio stream
                         await self.send_silence(duration_ms=100)
-                        # Wait for greeting to complete before continuing
-                        await self.speak(self.greeting)
+                        # Run greeting in background to not block message processing
+                        asyncio.create_task(self.speak(self.greeting))
 
                 elif event == "media":
                     # Decode base64 mulaw audio
@@ -358,8 +358,6 @@ class SignalWireMediaBridge:
     async def speak(self, text: str):
         """Send text to Cartesia TTS via HTTP and play to caller"""
         try:
-            self.speaking = True
-
             # Build Cartesia TTS request
             tts_request = {
                 "model_id": "sonic-english",
@@ -375,7 +373,7 @@ class SignalWireMediaBridge:
                 }
             }
 
-            # Make HTTP POST request to Cartesia
+            # Make HTTP POST request to Cartesia (keep-alive will run during this request)
             async with self.http_session.post(
                 CARTESIA_TTS_URL,
                 headers={
@@ -390,6 +388,9 @@ class SignalWireMediaBridge:
 
                     # Read audio bytes
                     audio_bytes = await response.read()
+
+                    # Now we're actually speaking - set flag to stop keep-alive
+                    self.speaking = True
 
                     # Send audio to SignalWire in chunks
                     chunk_size = 160 * 2  # 160 samples * 2 bytes (16-bit PCM)
