@@ -5,6 +5,7 @@ import base64
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from starlette.websockets import WebSocketState
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
 import websockets
@@ -117,6 +118,9 @@ class SignalWireMediaBridge:
         # Transcript accumulation
         self.is_finals = []
 
+        # Background tasks
+        self.background_tasks = []
+
     async def start(self):
         """Start the Media Stream bridge"""
         print("🚀 Starting Media Stream bridge...")
@@ -126,6 +130,10 @@ class SignalWireMediaBridge:
 
         # Connect to Deepgram STT
         await self.setup_deepgram_stt()
+
+        # Start SignalWire keep-alive task
+        keepalive_task = asyncio.create_task(self.signalwire_keepalive())
+        self.background_tasks.append(keepalive_task)
 
         # Start listening to SignalWire messages (greeting will be sent after "start" event)
         await self.listen_to_signalwire()
@@ -177,8 +185,39 @@ class SignalWireMediaBridge:
                 await asyncio.sleep(5)  # Every 5 seconds
                 if self.stt_ws:
                     await self.stt_ws.send(json.dumps({"type": "KeepAlive"}))
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
-            print(f"⚠️  Keep-alive stopped: {e}")
+            print(f"⚠️  Deepgram keep-alive stopped: {e}")
+
+    async def signalwire_keepalive(self):
+        """Send periodic silence to keep SignalWire connection alive during long processing"""
+        try:
+            while True:
+                await asyncio.sleep(2.0)  # Every 2 seconds
+
+                # Only send keepalive if we're not actively speaking
+                if not self.speaking and self.stream_sid:
+                    # Check if connection is still alive
+                    if self.signalwire_ws.client_state != WebSocketState.CONNECTED:
+                        break
+
+                    try:
+                        # Send single silent frame
+                        silence = bytes(320)  # 20ms of silence
+                        payload = base64.b64encode(silence).decode('utf-8')
+
+                        await self.signalwire_ws.send_json({
+                            "event": "media",
+                            "streamSid": self.stream_sid,
+                            "media": {"payload": payload}
+                        })
+                    except Exception:
+                        break  # Connection closed
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            print(f"⚠️  SignalWire keep-alive stopped: {e}")
 
     async def listen_to_signalwire(self):
         """Listen for messages from SignalWire"""
@@ -200,7 +239,8 @@ class SignalWireMediaBridge:
                         print(f"👋 Sending greeting...")
                         # Send brief silence first to keep connection alive
                         await self.send_silence(duration_ms=100)
-                        asyncio.create_task(self.speak(self.greeting))
+                        # Wait for greeting to complete before continuing
+                        await self.speak(self.greeting)
 
                 elif event == "media":
                     # Decode base64 mulaw audio
@@ -357,7 +397,12 @@ class SignalWireMediaBridge:
                         if not self.speaking:
                             break
 
-                        # Check if websocket is still connected
+                        # Check connection state BEFORE sending
+                        if self.signalwire_ws.client_state != WebSocketState.CONNECTED:
+                            print(f"⚠️  WebSocket disconnected (state: {self.signalwire_ws.client_state}), stopping audio")
+                            self.speaking = False
+                            break
+
                         try:
                             chunk = audio_bytes[i:i + chunk_size]
                             payload = base64.b64encode(chunk).decode('utf-8')
@@ -373,7 +418,8 @@ class SignalWireMediaBridge:
                             # Small delay to pace audio streaming
                             await asyncio.sleep(0.020)  # 20ms per chunk
                         except Exception as e:
-                            print(f"⚠️  Websocket closed, stopping audio: {e}")
+                            print(f"⚠️  Websocket send error: {e}")
+                            self.speaking = False
                             break
                 else:
                     error_text = await response.text()
@@ -420,14 +466,31 @@ class SignalWireMediaBridge:
             })
 
     async def cleanup(self):
-        """Clean up connections"""
+        """Clean up connections and cancel background tasks"""
         print("🧹 Cleaning up connections...")
 
-        if self.stt_ws:
-            await self.stt_ws.close()
+        # Cancel all background tasks
+        for task in self.background_tasks:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
+        # Close WebSocket connections
+        if self.stt_ws:
+            try:
+                await self.stt_ws.close()
+            except Exception as e:
+                print(f"⚠️  Error closing Deepgram STT: {e}")
+
+        # Close HTTP session
         if self.http_session:
-            await self.http_session.close()
+            try:
+                await self.http_session.close()
+            except Exception as e:
+                print(f"⚠️  Error closing HTTP session: {e}")
 
 
 # ============================================================================
