@@ -155,13 +155,30 @@ class SignalWireMediaBridge:
             self.stt_ws = await websockets.connect(stt_url, extra_headers=extra_headers)
             print("✅ Deepgram STT connected")
 
+            # Send initial silent frame to prevent timeout
+            silent_frame = bytes(320)  # 160 samples * 2 bytes = 320 bytes of silence
+            await self.stt_ws.send(silent_frame)
+
             # Start task to listen for transcriptions
             asyncio.create_task(self.listen_to_stt())
+
+            # Start keep-alive task
+            asyncio.create_task(self.deepgram_keepalive())
 
         except Exception as e:
             print(f"❌ Failed to connect to Deepgram STT: {e}")
             raise
 
+
+    async def deepgram_keepalive(self):
+        """Send keep-alive messages to Deepgram STT to prevent timeout"""
+        try:
+            while self.stt_ws:
+                await asyncio.sleep(5)  # Every 5 seconds
+                if self.stt_ws:
+                    await self.stt_ws.send(json.dumps({"type": "KeepAlive"}))
+        except Exception as e:
+            print(f"⚠️  Keep-alive stopped: {e}")
 
     async def listen_to_signalwire(self):
         """Listen for messages from SignalWire"""
@@ -338,19 +355,24 @@ class SignalWireMediaBridge:
                         if not self.speaking:
                             break
 
-                        chunk = audio_bytes[i:i + chunk_size]
-                        payload = base64.b64encode(chunk).decode('utf-8')
+                        # Check if websocket is still connected
+                        try:
+                            chunk = audio_bytes[i:i + chunk_size]
+                            payload = base64.b64encode(chunk).decode('utf-8')
 
-                        await self.signalwire_ws.send_json({
-                            "event": "media",
-                            "streamSid": self.stream_sid,
-                            "media": {
-                                "payload": payload
-                            }
-                        })
+                            await self.signalwire_ws.send_json({
+                                "event": "media",
+                                "streamSid": self.stream_sid,
+                                "media": {
+                                    "payload": payload
+                                }
+                            })
 
-                        # Small delay to pace audio streaming
-                        await asyncio.sleep(0.020)  # 20ms per chunk
+                            # Small delay to pace audio streaming
+                            await asyncio.sleep(0.020)  # 20ms per chunk
+                        except Exception as e:
+                            print(f"⚠️  Websocket closed, stopping audio: {e}")
+                            break
                 else:
                     error_text = await response.text()
                     print(f"❌ Cartesia TTS error: {response.status} - {error_text}")
