@@ -320,7 +320,7 @@ class SignalWireMediaBridge:
 
             # Stream response from Claude
             async with anthropic_client.messages.stream(
-                model="claude-4-5-haiku-latest",
+                model="claude-3-5-haiku-20241022",
                 max_tokens=1024,
                 system=self.system_prompt,
                 messages=self.conversation_history,
@@ -633,7 +633,7 @@ async def signalwire_voice_agent(websocket: WebSocket):
         signalwire_ws=websocket,
         system_prompt="You are a friendly and helpful customer support agent for Senior Life Insurance. Your name is Leslie, and you speak in a warm, polite manner. Assist callers with their life insurance questions or requests, providing clear and empathetic responses.",
         greeting="Thank you for calling senior life insurance, my name is Leslie. For quality purposes this call may be recorded, may I get your first name?",
-        voice_model="aura-2-andromeda-en"
+        voice_model="aura-hera-en"  # Warm, mature female voice - great for customer service
     )
 
     try:
