@@ -29,19 +29,36 @@ else:
     database_url = "sqlite+aiosqlite:///./voicemesh.db"
     logger.info("using_sqlite_for_local_development")
 
-# Configure connection args for Fly.io Postgres
-# For internal Fly.io connections (.internal hostname), explicitly disable SSL
-# SSL on internal network causes ConnectionResetError with asyncpg
-connect_args = {"ssl": False} if settings.DATABASE_URL else {}
+# Check if using PostgreSQL or SQLite
+is_postgres = database_url.startswith(('postgresql', 'postgres'))
 
-engine = create_async_engine(
-    database_url,
-    echo=not settings.is_production,  # Log SQL queries in development
-    pool_pre_ping=True if settings.DATABASE_URL else False,  # Only for Postgres
-    pool_size=5 if settings.DATABASE_URL else 0,  # SQLite doesn't use connection pooling
-    max_overflow=10 if settings.DATABASE_URL else 0,
-    connect_args=connect_args,
-)
+# Configure connection args
+if is_postgres:
+    # For internal Fly.io connections (.internal hostname), explicitly disable SSL
+    # SSL on internal network causes ConnectionResetError with asyncpg
+    connect_args = {"ssl": False} if settings.DATABASE_URL and ".internal" in settings.DATABASE_URL else {}
+else:
+    # SQLite connection args
+    connect_args = {}
+
+# Create async engine with appropriate configuration
+if is_postgres:
+    # PostgreSQL configuration with connection pooling
+    engine = create_async_engine(
+        database_url,
+        echo=not settings.is_production,  # Log SQL queries in development
+        pool_pre_ping=True,
+        pool_size=5,
+        max_overflow=10,
+        connect_args=connect_args,
+    )
+else:
+    # SQLite configuration (no connection pooling)
+    engine = create_async_engine(
+        database_url,
+        echo=not settings.is_production,  # Log SQL queries in development
+        connect_args=connect_args,
+    )
 
 # Create async session factory
 AsyncSessionLocal = async_sessionmaker(

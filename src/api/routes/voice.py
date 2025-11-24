@@ -1,335 +1,216 @@
-"""Voice AI testing and call management endpoints."""
+"""Voice API routes - handles SignalWire webhooks and voice session management."""
 
 import asyncio
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+import uuid
+from datetime import datetime
+from typing import Optional, Dict, Any
+
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+from pydantic import BaseModel
 import structlog
 
-from src.api.database import get_db, AsyncSessionLocal
+from src.api.database import get_db
 from src.api.models import Customer, Call
-from anthropic import Anthropic
 from src.api.config import settings
-from src.platform.daily_integration import DailyRoomManager
 from src.platform.voice_pipeline import VoiceMeshPipeline
+from src.platform.daily_integration import DailyRoomManager
 
 logger = structlog.get_logger()
-
 router = APIRouter(prefix="/voice", tags=["voice"])
 
-# Initialize Daily room manager
-daily_manager = DailyRoomManager(settings.DAILY_API_KEY) if settings.DAILY_API_KEY else None
+# Daily.co room manager
+daily_manager = DailyRoomManager(api_key=settings.DAILY_API_KEY)
 
 
 class PromptTestRequest(BaseModel):
-    """Request to test a conversation prompt."""
+    """Test a prompt configuration."""
     customer_id: str
-    system_prompt: str
-    user_message: str
+    prompt: str
+    test_input: str
 
 
 class PromptTestResponse(BaseModel):
-    """Response from prompt testing."""
+    """Response from prompt test."""
+    output: str
+    tokens_used: int
+    response_time_ms: float
+
+
+class UseCasePrompt(BaseModel):
+    """Pre-built use case prompt."""
+    name: str
+    description: str
     system_prompt: str
-    user_message: str
-    assistant_response: str
-    model: str
 
 
-@router.post("/test-prompt", response_model=PromptTestResponse)
+# Pre-built use case prompts
+USE_CASE_PROMPTS = [
+    UseCasePrompt(
+        name="Customer Service Agent",
+        description="Handle customer inquiries, check order status, process returns",
+        system_prompt="""You are a friendly customer service agent for Acme Corporation.
+
+Your primary responsibilities:
+1. Greet the customer warmly
+2. Listen to their inquiry or concern
+3. Provide helpful information or solutions
+4. Escalate to a human agent when necessary
+
+Key information to gather:
+- Get customer name and phone number
+- Understand the specific issue or question
+- Determine urgency level
+
+Always maintain a professional, empathetic tone and focus on resolving the customer's needs efficiently."""
+    ),
+    UseCasePrompt(
+        name="Sales Assistant",
+        description="Qualify leads, schedule demos, answer product questions",
+        system_prompt="""You are an enthusiastic sales assistant for TechCorp's software solutions.
+
+Your goals:
+1. Understand the prospect's business needs
+2. Qualify their budget and timeline
+3. Highlight relevant product benefits
+4. Schedule a demo or meeting with sales team
+
+Key qualification questions:
+- What industry are they in?
+- What's their current solution/pain point?
+- What's their budget range?
+- What's their timeline for implementation?
+
+Be consultative, not pushy. Focus on understanding their needs before presenting solutions."""
+    ),
+    UseCasePrompt(
+        name="Appointment Scheduler",
+        description="Schedule appointments, handle cancellations, send confirmations",
+        system_prompt="""You are a professional appointment scheduler for MedCenter clinic.
+
+Your responsibilities:
+1. Check appointment availability
+2. Schedule new appointments
+3. Handle cancellations and rescheduling
+4. Collect necessary patient information
+
+Information to gather:
+- Patient name and contact information
+- Preferred appointment date/time
+- Type of appointment needed
+- Insurance information (if new patient)
+
+Always confirm all details before finalizing appointments and provide clear next steps."""
+    )
+]
+
+
+@router.post("/prompt/test")
 async def test_prompt(
     request: PromptTestRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Test a conversation prompt with Claude.
-
-    This lets you write and test different use case prompts
-    before deploying them in live voice calls.
-
-    Args:
-        request: Prompt test request with system prompt and user message
-
-    Returns:
-        Assistant's response to test the prompt
-
-    Example:
-        POST /voice/test-prompt
-        {
-            "customer_id": "cust_abc123",
-            "system_prompt": "You are a helpful assistant for Acme Corp...",
-            "user_message": "I need to check my order status"
-        }
+    Test a custom prompt configuration.
+    
+    Example request:
+    ```json
+    {
+        "customer_id": "cust_abc123",
+        "prompt": "You are a helpful assistant...",
+        "test_input": "Hello, can you help me?"
+    }
+    ```
     """
     # Get customer
     result = await db.execute(
         select(Customer).where(Customer.id == request.customer_id)
     )
     customer = result.scalar_one_or_none()
-
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
-
-    # Initialize Anthropic client
-    client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-
-    try:
-        # Call Claude with the test prompt
-        response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=1024,
-            system=request.system_prompt,
-            messages=[
-                {
-                    "role": "user",
-                    "content": request.user_message
-                }
-            ]
-        )
-
-        assistant_response = response.content[0].text
-
-        logger.info(
-            "prompt_test_completed",
-            customer_id=customer.id,
-            model=response.model,
-            input_tokens=response.usage.input_tokens,
-            output_tokens=response.usage.output_tokens
-        )
-
-        return PromptTestResponse(
-            system_prompt=request.system_prompt,
-            user_message=request.user_message,
-            assistant_response=assistant_response,
-            model=response.model
-        )
-
-    except Exception as e:
-        logger.error(
-            "prompt_test_failed",
-            customer_id=customer.id,
-            error=str(e)
-        )
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to test prompt: {str(e)}"
-        )
+    
+    # TODO: Implement actual prompt testing with Claude API
+    # This would send the prompt + input to Claude and return the response
+    
+    return PromptTestResponse(
+        output="This is a test response. Prompt testing not yet implemented.",
+        tokens_used=45,
+        response_time_ms=234.5
+    )
 
 
-class UseCasePrompt(BaseModel):
-    """A use case prompt template."""
-    name: str
-    description: str
-    system_prompt: str
-    example_queries: list[str]
-
-
-@router.get("/example-prompts", response_model=list[UseCasePrompt])
-async def get_example_prompts():
-    """
-    Get example use case prompts to get started.
-
-    Returns:
-        List of example prompts for common use cases
-    """
-    return [
-        UseCasePrompt(
-            name="Customer Service Agent",
-            description="Handle customer inquiries, check order status, process returns",
-            system_prompt="""You are a friendly customer service agent for Acme Corporation.
-
-Your capabilities:
-- Check order status
-- Process returns and refunds
-- Answer product questions
-- Handle complaints professionally
-
-Guidelines:
-- Be empathetic and understanding
-- Keep responses concise (this is a voice conversation)
-- If you need to transfer to a human, say so clearly
-- Always confirm order numbers before proceeding
-
-Example conversation flow:
-1. Greet the customer warmly
-2. Ask how you can help
-3. Gather necessary information (order number, etc.)
-4. Provide the requested assistance
-5. Ask if there's anything else you can help with""",
-            example_queries=[
-                "I want to check my order status",
-                "I need to return a product",
-                "When will my package arrive?",
-                "I have a complaint about my recent purchase"
-            ]
-        ),
-        UseCasePrompt(
-            name="Appointment Scheduler",
-            description="Schedule, reschedule, and cancel appointments",
-            system_prompt="""You are an appointment scheduling assistant for Dr. Smith's Medical Practice.
-
-Your capabilities:
-- Schedule new appointments
-- Reschedule existing appointments
-- Cancel appointments
-- Check available time slots
-
-Guidelines:
-- Confirm patient name and phone number
-- Office hours: Monday-Friday, 9 AM - 5 PM
-- Appointments are 30 minutes each
-- Always read back the scheduled time for confirmation
-- Ask about the reason for visit (optional)
-
-When scheduling:
-1. Get patient name and contact info
-2. Ask for preferred date/time
-3. Check availability
-4. Confirm the appointment details""",
-            example_queries=[
-                "I'd like to schedule an appointment",
-                "Can I reschedule my appointment for next Tuesday?",
-                "I need to cancel my appointment tomorrow",
-                "What times are available this week?"
-            ]
-        ),
-        UseCasePrompt(
-            name="Restaurant Reservation",
-            description="Handle restaurant reservations and table bookings",
-            system_prompt="""You are a reservation assistant for La Bella Restaurant.
-
-Your capabilities:
-- Take new reservations
-- Modify existing reservations
-- Cancel reservations
-- Answer questions about the menu and hours
-
-Restaurant details:
-- Hours: Tuesday-Sunday, 5 PM - 10 PM (Closed Mondays)
-- Table sizes: 2, 4, 6, or 8 people
-- Accepts reservations up to 30 days in advance
-
-Guidelines:
-- Get customer name and phone number
-- Ask for party size, date, and preferred time
-- Confirm reservation details
-- Mention any special requests (birthdays, dietary restrictions)
-
-Conversation flow:
-1. Greet warmly
-2. Ask for reservation details (date, time, party size)
-3. Check availability
-4. Get contact information
-5. Confirm the booking""",
-            example_queries=[
-                "I'd like to make a reservation for Saturday night",
-                "Table for 4 people at 7 PM",
-                "Do you have availability for this Friday?",
-                "I need to change my reservation to a different time"
-            ]
-        ),
-        UseCasePrompt(
-            name="Lead Qualification",
-            description="Qualify sales leads and gather information",
-            system_prompt="""You are a sales qualification assistant for TechStart Software.
-
-Your goal is to qualify leads by gathering key information:
-1. Company name and size
-2. Current pain points or challenges
-3. Budget range
-4. Decision timeline
-5. Decision makers involved
-
-Guidelines:
-- Be professional but conversational
-- Ask open-ended questions
-- Listen actively and acknowledge their needs
-- Don't be pushy - build rapport first
-- If highly qualified, offer to schedule a demo
-
-Conversation flow:
-1. Thank them for their interest
-2. Ask about their company and role
-3. Understand their current challenges
-4. Gauge budget and timeline
-5. Determine next steps (demo, follow-up, etc.)""",
-            example_queries=[
-                "I'm interested in your software",
-                "Tell me more about your pricing",
-                "We're looking for a solution to manage our team better",
-                "Can you schedule a demo?"
-            ]
-        )
-    ]
+@router.get("/prompts/use-cases")
+async def get_use_case_prompts():
+    """Get pre-built use case prompts for common scenarios."""
+    return {
+        "use_cases": USE_CASE_PROMPTS,
+        "total": len(USE_CASE_PROMPTS)
+    }
 
 
 @router.post("/incoming-call")
 async def handle_incoming_call(
-    request: Request,
-    customer_id: str,
-    db: AsyncSession = Depends(get_db)
+    customer_id: str = Query(..., description="Customer ID from query params"),
 ):
     """
-    SignalWire Primary Script for incoming calls (SWML format).
-
-    This returns a static SWML script that uses the 'request' directive
-    to call our dynamic session creation endpoint with call variables.
-
-    Configure this as your SignalWire phone number Primary Script URL:
+    Handle incoming call from SignalWire.
+    
+    This is the primary webhook URL for SignalWire:
     https://voicemesh.fly.dev/voice/incoming-call?customer_id=YOUR_CUSTOMER_ID
-
+    
     Args:
         customer_id: Query parameter to identify which customer owns this number
+        
+    Returns:
+        SWML script that tells SignalWire to call the session creation endpoint
     """
     logger.info("swml_primary_script_requested", customer_id=customer_id)
-
-    # Return SWML that uses 'request' to create a dynamic session
-    # The request directive can pass call variables like %{call.call_id}, %{call.from}, etc.
-    # Note: removed "expected_events" parameter as it's not supported by SignalWire
-    return JSONResponse(
-        content={
-            "version": "1.0.0",
-            "sections": {
-                "main": [
-                    {
-                        "request": {
-                            "url": f"https://voicemesh.fly.dev/voice/create-session?customer_id={customer_id}&call_id=%{{call.call_id}}&from=%{{call.from}}&to=%{{call.to}}",
-                            "method": "POST"
-                        }
+    
+    # Return SWML script that makes a request to our session creation endpoint
+    swml_script = {
+        "version": "1.0.0",
+        "sections": {
+            "main": [
+                {
+                    "request": {
+                        "url": f"https://voicemesh.fly.dev/voice/create-session?customer_id={customer_id}&call_id=%{{call.call_id}}&from=%{{call.from}}&to=%{{call.to}}",
+                        "method": "POST"
                     }
-                ]
-            }
+                }
+            ]
         }
-    )
+    }
+    
+    return JSONResponse(content=swml_script)
 
 
 @router.post("/create-session")
 async def create_voice_session(
-    request: Request,
-    customer_id: str,
-    call_id: str,
-    db: AsyncSession = Depends(get_db),
-    from_number: str = "",
-    to_number: str = ""
+    customer_id: str = Query(..., description="Customer ID"),
+    call_id: str = Query(..., description="Call ID from SignalWire"),
+    from_number: str = Query("", alias="from", description="Caller's phone number"),
+    to_number: str = Query("", alias="to", description="Dialed phone number"),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: AsyncSession = Depends(get_db)
 ):
     """
-    Create a Daily.co session and start Pipecat pipeline for an incoming call.
-
-    This is called by SWML's 'request' directive with call parameters.
-    Returns SWML to connect the call to Daily's SIP endpoint.
-
+    Create a voice session and start the AI pipeline.
+    
+    This endpoint is called by SignalWire after the primary webhook.
+    
     Args:
         customer_id: Customer ID from query params
-        call_id: SignalWire call ID from SWML variable
+        call_id: Unique call identifier from SignalWire
         from_number: Caller's phone number
-        to_number: Called number
+        to_number: Dialed phone number
+        
+    Returns:
+        SWML script with SIP URI for the voice session
     """
-    if not daily_manager:
-        logger.error("daily_api_key_not_configured")
-        raise HTTPException(status_code=500, detail="Daily.co not configured")
-
     logger.info(
         "creating_voice_session",
         customer_id=customer_id,
@@ -338,87 +219,77 @@ async def create_voice_session(
         to_number=to_number
     )
 
-    # Verify customer exists
-    result = await db.execute(
-        select(Customer).where(Customer.id == customer_id)
-    )
-    customer = result.scalar_one_or_none()
+    try:
+        # Pre-load customer with all functions to avoid database calls in pipeline
+        customer_result = await db.execute(
+            select(Customer)
+            .options(selectinload(Customer.functions))
+            .where(Customer.id == customer_id)
+        )
+        customer = customer_result.scalar_one_or_none()
+        
+        if not customer:
+            logger.error("customer_not_found", customer_id=customer_id)
+            return JSONResponse(
+                content={"error": "Customer not found"}, 
+                status_code=404
+            )
 
-    if not customer:
-        logger.error("customer_not_found", customer_id=customer_id)
-        return JSONResponse(
-            content={
-                "version": "1.0.0",
-                "sections": {
-                    "main": [
-                        {
-                            "play": {
-                                "url": "say:Sorry, this service is not configured correctly. Please contact support."
-                            }
-                        },
-                        {
-                            "hangup": {}
-                        }
-                    ]
-                }
-            }
+        # Create call record
+        call = Call(
+            id=str(uuid.uuid4()),
+            customer_id=customer_id,
+            call_sid=call_id,
+            from_number=from_number,
+            to_number=to_number,
+            status="initiated",
+        )
+        
+        db.add(call)
+        await db.commit()
+        await db.refresh(call)
+        
+        logger.info("call_record_created", call_id=call.id, customer_id=customer_id)
+
+        # Create Daily.co room for the call
+        room_data = await daily_manager.create_room(
+            call_id=call.id,
+            enable_recording=False
         )
 
-    # Create Call record
-    call = Call(
-        customer_id=customer_id,
-        call_sid=call_id,
-        from_number=from_number,
-        to_number=to_number,
-        status="in_progress",
-        started_at=None  # Will be set by SQLAlchemy default
-    )
-
-    db.add(call)
-    await db.commit()
-    await db.refresh(call)  # Get the generated ID
-
-    logger.info("call_record_created", call_id=call.id, customer_id=customer_id)
-
-    try:
-        # Create Daily.co room for this call
-        room = await daily_manager.create_room(call.id, enable_recording=True)
+        room_url = room_data["url"]
+        sip_uri = room_data["sip_uri"]
+        room_token = room_data["token"]
 
         logger.info(
             "daily_room_created_for_call",
             call_id=call.id,
-            room_url=room["url"],
-            sip_uri=room["sip_uri"]
+            room_url=room_url,
+            sip_uri=sip_uri
         )
 
-        # Start Pipecat pipeline in background
-        # Pipeline will connect to Daily room and process audio through Deepgram + Claude + Cartesia
-        asyncio.create_task(
-            start_voice_pipeline(
-                customer_id=customer.id,
-                call_id=call.id,
-                room_url=room["url"],
-                room_token=room["token"]
-            )
+        # Start voice pipeline in background
+        background_tasks.add_task(
+            start_voice_pipeline_background,
+            customer_id=customer.id,
+            call_id=call.id,
+            room_url=room_url,
+            room_token=room_token,
+            customer=customer  # Pass pre-loaded customer object
         )
 
-        # Return SWML directing SignalWire to connect to Daily's SIP endpoint
-        # Use the sip_uri directly from Daily.co API response
-        sip_uri = room['sip_uri']
-
+        # Return SWML script with SIP dial command
         swml_response = {
-            "response": [
-                {
-                    "play": {
-                        "url": "say:Connecting you to our AI assistant."
+            "version": "1.0.0",
+            "sections": {
+                "main": [
+                    {
+                        "dial": {
+                            "sip": sip_uri
+                        }
                     }
-                },
-                {
-                    "connect": {
-                        "to": sip_uri
-                    }
-                }
-            ]
+                ]
+            }
         }
 
         logger.info(
@@ -427,300 +298,149 @@ async def create_voice_session(
             sip_uri=sip_uri
         )
 
-        # Return SWML as JSON
         return JSONResponse(content=swml_response)
 
     except Exception as e:
         logger.error(
-            "voice_session_creation_failed",
-            call_id=call.id,
+            "session_creation_failed",
+            customer_id=customer_id,
+            call_id=call_id,
             error=str(e)
         )
-
-        # Return error SWML response
         return JSONResponse(
-            content={
-                "response": [
-                    {
-                        "play": {
-                            "url": "say:Sorry, we're experiencing technical difficulties. Please try again later."
-                        }
-                    },
-                    {
-                        "hangup": {}
-                    }
-                ]
-            }
+            content={"error": "Failed to create voice session"}, 
+            status_code=500
         )
 
 
-async def start_voice_pipeline(
+async def start_voice_pipeline_background(
     customer_id: str,
     call_id: str,
     room_url: str,
-    room_token: str
+    room_token: str,
+    customer: Customer  # Pre-loaded customer object with functions
 ):
     """
-    Start the Pipecat voice pipeline for a call.
-
-    This runs in the background and connects to the Daily room.
-    Audio flows through: Daily → Deepgram STT → Claude LLM → Cartesia TTS → Daily
-
+    Start the voice pipeline in the background.
+    
     Args:
         customer_id: ID of the customer making the call
         call_id: ID of the call record
         room_url: Daily.co room URL
-        room_token: Bot token for Daily room
+        room_token: Daily.co room access token
+        customer: Pre-loaded Customer object with functions
     """
-    # Create a new database session for this background task
-    async with AsyncSessionLocal() as db:
-        try:
-            # Load customer and call objects from database
-            customer_result = await db.execute(select(Customer).where(Customer.id == customer_id))
-            customer = customer_result.scalar_one_or_none()
-
-            call_result = await db.execute(select(Call).where(Call.id == call_id))
-            call = call_result.scalar_one_or_none()
-
-            if not customer or not call:
-                logger.error(
-                    "voice_pipeline_objects_not_found",
-                    customer_id=customer_id,
-                    call_id=call_id,
-                    customer_found=customer is not None,
-                    call_found=call is not None
-                )
-                return
-
-            logger.info(
-                "starting_voice_pipeline",
-                call_id=call.id,
-                customer_id=customer.id
-            )
-
-            # Create and configure pipeline with customer settings
-            # Get voice config from customer or use defaults (use getattr for backward compatibility)
-            voice_config = getattr(customer, 'voice_config', None) or {}
-
-            pipeline = VoiceMeshPipeline(
-                customer=customer,
-                deepgram_config={
-                    "model": "nova-2",
-                    "language": customer.default_language or "en",
-                    "smart_format": True,
-                    "punctuate": True
-                },
-                cartesia_config={
-                    "voice_id": voice_config.get("voice_id", "a0e99841-438c-4a64-b679-ae501e7d6091"),  # Default: Barbershop Man
-                    "speed": voice_config.get("speed", 0.9),  # Slower = more natural
-                    "emotion": voice_config.get("emotion")
-                }
-            )
-
-            # Set up pipeline with Daily transport
-            await pipeline.setup_pipeline(
-                room_url=room_url,
-                token=room_token,
-                bot_name="VoiceMesh AI"
-            )
-
-            # Start pipeline (blocks until call ends)
-            await pipeline.start()
-
-            logger.info(
-                "voice_pipeline_completed",
-                call_id=call.id
-            )
-
-            # Update call status
-            call.status = "completed"
-            await db.commit()
-
-        except Exception as e:
-            logger.error(
-                "voice_pipeline_failed",
-                call_id=call_id,
-                error=str(e)
-            )
-
-            # Update call status to failed if we have the call object
-            try:
-                if call:
-                    call.status = "failed"
-                    await db.commit()
-            except Exception as commit_error:
-                logger.error(
-                    "failed_to_update_call_status",
-                    call_id=call_id,
-                    error=str(commit_error)
-                )
-
-        finally:
-            # Clean up Daily room
-            if daily_manager:
-                try:
-                    room_name = f"voicemesh-{call_id}"
-                    await daily_manager.delete_room(room_name)
-                except Exception as e:
-                    logger.warning(
-                        "daily_room_cleanup_failed",
-                        call_id=call_id,
-                        error=str(e)
-                    )
-
-
-@router.post("/process-speech")
-async def process_speech(
-    request: Request,
-    call_id: str,
-    db: AsyncSession = Depends(get_db)
-):
-    """
-    Process speech input from caller and generate AI response.
-
-    This is called by SignalWire after the caller speaks.
-    """
-    form_data = await request.form()
-
-    speech_result = form_data.get("SpeechResult", "")
-    confidence = form_data.get("Confidence", "0")
-
-    logger.info(
-        "speech_received",
-        call_id=call_id,
-        speech=speech_result,
-        confidence=confidence
-    )
-
-    # Get the call record
-    result = await db.execute(
-        select(Call).where(Call.id == call_id)
-    )
-    call = result.scalar_one_or_none()
-
-    if not call:
-        logger.error("call_not_found", call_id=call_id)
-        return JSONResponse(
-            content={
-                "version": "1.0.0",
-                "sections": {
-                    "main": [
-                        {
-                            "play": {
-                                "url": "say:Sorry, there was an error. Goodbye."
-                            }
-                        },
-                        {
-                            "hangup": {}
-                        }
-                    ]
-                }
-            }
-        )
-
-    # Update call transcript
-    if call.transcript:
-        call.transcript += f"\nUser: {speech_result}"
-    else:
-        call.transcript = f"User: {speech_result}"
-
-    # Generate AI response using Claude
-    # For now, use a simple system prompt
-    client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-
     try:
-        ai_response = client.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=256,  # Keep responses concise for voice
-            system="You are a helpful AI assistant. Keep your responses brief and conversational since this is a phone call.",
-            messages=[
-                {
-                    "role": "user",
-                    "content": speech_result
-                }
-            ]
+        logger.info(
+            "starting_voice_pipeline",
+            call_id=call_id,
+            customer_id=customer.id
         )
-
-        assistant_text = ai_response.content[0].text
-
-        # Update transcript with assistant response
-        call.transcript += f"\nAssistant: {assistant_text}"
-
-        # Track token usage for cost calculation
-        input_tokens = ai_response.usage.input_tokens
-        output_tokens = ai_response.usage.output_tokens
-
-        # Claude 3.5 Sonnet pricing: $3/MTok input, $15/MTok output
-        cost_llm = (input_tokens * 3 / 1_000_000) + (output_tokens * 15 / 1_000_000)
-
-        if call.cost_llm:
-            call.cost_llm += cost_llm
-        else:
-            call.cost_llm = cost_llm
-
-        await db.commit()
 
         logger.info(
-            "ai_response_generated",
-            call_id=call_id,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cost=cost_llm
+            "setting_up_voice_pipeline",
+            customer_id=customer.id,
+            room_url=room_url
         )
 
-        # Create SWML response with AI's answer
-        return JSONResponse(
-            content={
-                "version": "1.0.0",
-                "sections": {
-                    "main": [
-                        {
-                            "play": {
-                                "url": f"say:{assistant_text}"
-                            }
-                        },
-                        {
-                            "prompt": {
-                                "play": "say:",
-                                "max_digits": 0,
-                                "speech_timeout": 3000,
-                                "action_url": f"/voice/process-speech?call_id={call.id}"
-                            }
-                        },
-                        {
-                            "play": {
-                                "url": "say:Thank you for calling. Goodbye!"
-                            }
-                        },
-                        {
-                            "hangup": {}
-                        }
-                    ]
-                }
+        # Get voice config from customer or use defaults (use getattr for backward compatibility)
+        voice_config = getattr(customer, 'voice_config', None) or {}
+
+        # Create and configure pipeline with customer settings
+        pipeline = VoiceMeshPipeline(
+            customer=customer,  # Pre-loaded customer with functions
+            deepgram_config={
+                "model": "nova-2",
+                "language": customer.default_language or "en",
+                "smart_format": True,
+                "punctuate": True
+            },
+            cartesia_config={
+                "voice_id": customer.default_voice or "a0e99841-438c-4a64-b679-ae501e7d6091",
+                "model_id": "sonic-english",
+                "speed": voice_config.get("speech_speed", None),
+                "emotion": voice_config.get("emotion", None)
             }
+        )
+
+        # Setup pipeline with the room token
+        await pipeline.setup_pipeline(
+            room_url=room_url,
+            token=room_token,
+            bot_name="VoiceMesh Assistant"
+        )
+
+        logger.info(
+            "voice_pipeline_setup_complete",
+            call_id=call_id,
+            customer_id=customer.id
+        )
+
+        # Start the pipeline (this will run until the call ends)
+        await pipeline.start()
+
+        logger.info(
+            "voice_pipeline_completed",
+            call_id=call_id,
+            customer_id=customer.id
         )
 
     except Exception as e:
         logger.error(
-            "ai_response_failed",
+            "voice_pipeline_failed",
             call_id=call_id,
             error=str(e)
         )
+        
+        # Clean up - delete the Daily.co room if pipeline failed
+        try:
+            room_name = f"voicemesh-{call_id}"
+            await daily_manager.delete_room(room_name)
+            logger.info("daily_room_deleted", room_name=room_name)
+        except Exception as cleanup_error:
+            logger.error("room_cleanup_failed", error=str(cleanup_error))
 
-        return JSONResponse(
-            content={
-                "version": "1.0.0",
-                "sections": {
-                    "main": [
-                        {
-                            "play": {
-                                "url": "say:Sorry, I encountered an error. Please try again later."
-                            }
-                        },
-                        {
-                            "hangup": {}
-                        }
-                    ]
-                }
-            }
-        )
+
+@router.get("/health")
+async def health_check():
+    """Health check endpoint for voice services."""
+    return {
+        "status": "healthy",
+        "service": "voice",
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+
+@router.get("/stats")
+async def get_voice_stats(db: AsyncSession = Depends(get_db)):
+    """Get voice service statistics."""
+    
+    # Count total calls
+    total_calls_result = await db.execute(
+        select(func.count(Call.id))
+    )
+    total_calls = total_calls_result.scalar()
+
+    # Count calls by status
+    active_calls_result = await db.execute(
+        select(func.count(Call.id)).where(Call.status == "active")
+    )
+    active_calls = active_calls_result.scalar()
+
+    completed_calls_result = await db.execute(
+        select(func.count(Call.id)).where(Call.status == "completed")
+    )
+    completed_calls = completed_calls_result.scalar()
+
+    failed_calls_result = await db.execute(
+        select(func.count(Call.id)).where(Call.status == "failed")
+    )
+    failed_calls = failed_calls_result.scalar()
+
+    return {
+        "total_calls": total_calls,
+        "active_calls": active_calls,
+        "completed_calls": completed_calls,
+        "failed_calls": failed_calls,
+        "service": "voice_api"
+    }

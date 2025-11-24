@@ -38,7 +38,10 @@
       "Bash(gh run list:*)",
       "Bash(gh run watch:*)",
       "Bash(flyctl ssh console:*)",
-      "Bash(flyctl postgres:*)"
+      "Bash(flyctl postgres:*)",
+      "Bash(Select-Object -Last 50)",
+      "Bash(powershell -Command \"flyctl logs --app voicemesh --no-tail | Select-Object -Last 100\")",
+      "Bash(powershell -Command \"flyctl logs --app voicemesh --no-tail | Select-Object -Last 50\")"
     ],
     "deny": [],
     "ask": []

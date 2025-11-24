@@ -4,7 +4,7 @@ import asyncio
 from typing import Optional, Dict, Any
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.pipeline.task import PipelineTask
 from pipecat.services.deepgram import DeepgramSTTService
 from pipecat.services.anthropic import AnthropicLLMService
 from pipecat.transports.services.daily import DailyTransport, DailyParams
@@ -61,6 +61,7 @@ class VoiceMeshPipeline:
         self.customer = customer
         self.pipeline: Optional[Pipeline] = None
         self.runner: Optional[PipelineRunner] = None
+        self.task: Optional[PipelineTask] = None
 
         # Deepgram configuration
         self.deepgram_config = deepgram_config or {}
@@ -77,6 +78,48 @@ class VoiceMeshPipeline:
         self.cartesia_model = self.cartesia_config.get("model_id", "sonic-english")
         self.cartesia_speed = self.cartesia_config.get("speed", None)
         self.cartesia_emotion = self.cartesia_config.get("emotion", None)
+
+    async def _test_cartesia_connection(self) -> bool:
+        """
+        Test connection to Cartesia WebSocket before creating the service.
+        
+        Returns:
+            True if connection successful, raises RuntimeError if failed
+        """
+        try:
+            import websockets
+            
+            logger.info("testing_cartesia_connection", customer_id=self.customer.id)
+            
+            # Test basic connection to Cartesia WebSocket
+            test_ws = await asyncio.wait_for(
+                websockets.connect(
+                    "wss://api.cartesia.ai/tts/websocket",
+                    extra_headers={"X-API-Key": settings.CARTESIA_API_KEY}
+                ),
+                timeout=5  # 5 second timeout for connection test
+            )
+            await test_ws.close()
+            
+            logger.info("cartesia_connection_test_passed", customer_id=self.customer.id)
+            return True
+            
+        except asyncio.TimeoutError:
+            logger.error(
+                "cartesia_connection_timeout",
+                customer_id=self.customer.id,
+                message="Cartesia WebSocket connection timed out"
+            )
+            raise RuntimeError("TTS service connection timeout") from None
+            
+        except Exception as e:
+            logger.error(
+                "cartesia_connection_failed",
+                customer_id=self.customer.id,
+                error=str(e),
+                error_type=type(e).__name__
+            )
+            raise RuntimeError(f"TTS service unavailable: {str(e)}") from e
 
     async def setup_pipeline(
         self,
@@ -98,7 +141,10 @@ class VoiceMeshPipeline:
             room_url=room_url
         )
 
-        # 1. Transport (Daily.co for now, will add SignalWire)
+        # 1. Test Cartesia connection BEFORE setting up the pipeline
+        await self._test_cartesia_connection()
+
+        # 2. Transport (Daily.co with container-friendly configuration)
         # Note: VAD disabled for now (Silero requires heavy ML dependencies)
         transport = DailyTransport(
             room_url,
@@ -108,11 +154,12 @@ class VoiceMeshPipeline:
                 audio_out_enabled=True,
                 audio_in_enabled=True,
                 vad_enabled=False,  # Disabled for faster deployment
-                transcription_enabled=False  # We use Deepgram
+                transcription_enabled=False,  # We use Deepgram
+                camera_out_enabled=False,  # No video needed for voice calls
             )
         )
 
-        # 2. Speech-to-Text (Deepgram with custom configuration)
+        # 3. Speech-to-Text (Deepgram with custom configuration)
         stt_params = {
             "api_key": settings.DEEPGRAM_API_KEY,
             "language": self.deepgram_language,
@@ -132,14 +179,15 @@ class VoiceMeshPipeline:
 
         stt_service = DeepgramSTTService(**stt_params)
 
-        # 3. LLM (Claude via Anthropic)
+        # 4. LLM (Claude via Anthropic)
         llm_service = AnthropicLLMService(
             api_key=settings.ANTHROPIC_API_KEY,
             model="claude-3-5-sonnet-20241022",
             system=self.get_system_prompt()
         )
 
-        # 4. Text-to-Speech (Cartesia with custom configuration)
+        # 5. Text-to-Speech (Cartesia with custom configuration)
+        # Connection test passed, so we can safely create the service
         # Build params for voice customization
         params_config = {}
         if self.cartesia_speed or self.cartesia_emotion:
@@ -150,6 +198,7 @@ class VoiceMeshPipeline:
                 generation_config["emotion"] = self.cartesia_emotion
             params_config["generation_config"] = generation_config
 
+        logger.info("creating_cartesia_tts_service", customer_id=self.customer.id)
         tts_service = CartesiaTTSService(
             api_key=settings.CARTESIA_API_KEY,
             voice_id=self.cartesia_voice_id,
@@ -157,7 +206,7 @@ class VoiceMeshPipeline:
             params=CartesiaTTSService.InputParams(**params_config) if params_config else None
         )
 
-        # 5. Build the pipeline
+        # 6. Build the pipeline
         self.pipeline = Pipeline([
             transport.input(),
             stt_service,
@@ -166,14 +215,8 @@ class VoiceMeshPipeline:
             transport.output()
         ])
 
-        # Create pipeline task
-        task = PipelineTask(
-            self.pipeline,
-            PipelineParams(
-                allow_interruptions=True,
-                enable_metrics=True
-            )
-        )
+        # Create simple pipeline task
+        self.task = PipelineTask(self.pipeline)
 
         # Create runner
         self.runner = PipelineRunner()
@@ -184,12 +227,27 @@ class VoiceMeshPipeline:
         )
 
     async def start(self):
-        """Start the voice pipeline."""
-        if not self.runner:
+        """Start the voice pipeline with error handling for failures."""
+        if not self.runner or not self.task:
             raise RuntimeError("Pipeline not set up. Call setup_pipeline() first.")
 
         logger.info("starting_voice_pipeline", customer_id=self.customer.id)
-        await self.runner.run()
+        
+        try:
+            await self.runner.run(self.task)
+        except Exception as e:
+            logger.error(
+                "voice_pipeline_runtime_error",
+                customer_id=self.customer.id,
+                error_type=type(e).__name__,
+                message=str(e)
+            )
+            # Don't re-raise to prevent server crashes
+        finally:
+            logger.info(
+                "voice_pipeline_stopped",
+                customer_id=self.customer.id
+            )
 
     async def stop(self):
         """Stop the voice pipeline."""
