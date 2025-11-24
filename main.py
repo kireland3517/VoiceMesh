@@ -2,7 +2,7 @@ import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, Any, Dict
 import httpx
 from dotenv import load_dotenv
 
@@ -134,7 +134,7 @@ async def create_agent(body: CreateAgentRequest):
         )
 
     # Build the agent configuration (from the PDF)
-    agent_config = {
+    agent_config: Dict[str, Any] = {
         "type": "Settings",
         "tags": ["voicemesh", body.agent_name],
         "audio": {
