@@ -1,23 +1,44 @@
 # VoiceMesh - Deepgram Voice Agent Backend
 
-A minimal FastAPI backend for creating and managing Deepgram Voice Agent sessions. Deploy to Railway in minutes.
+Create and manage complete Deepgram Voice Agents with STT, LLM, and TTS in one API call. Deploy to Railway in minutes.
 
 ## Features
 
-- **FastAPI** - Modern, fast async web framework
-- **Deepgram Voice Agent** - Create voice sessions via REST API
+- **Create Full Voice Agents** - STT (Deepgram) + LLM (Claude) + TTS (Deepgram Aura)
+- **Session Management** - Create WebSocket sessions for voice streaming
+- **Customizable** - Configure system prompts, greetings, voices, and LLM settings
 - **Railway-ready** - One-click deployment
 - **CORS enabled** - Ready for browser/web clients
-- **Health checks** - Monitor API status and configuration
+
+## Architecture
+
+```
+VoiceMesh Backend
+      ↓
+Creates Agent via Deepgram API
+  - STT: Deepgram (flux-general-en)
+  - LLM: Anthropic Claude (claude-4-5-haiku-latest)
+  - TTS: Deepgram Aura (aura-2-andromeda-en)
+      ↓
+Returns agent_id
+      ↓
+Create Session → Get ws_url
+      ↓
+Client connects to WebSocket
+```
 
 ## Quick Start (Local)
 
 ### Prerequisites
 
-1. **Deepgram Account**
+1. **Deepgram API Key**
    - Sign up at [https://deepgram.com](https://deepgram.com)
-   - Create an API key with `voice-agent:*` permissions
-   - Create a Voice Agent and note the `agent_id`
+   - Go to [Console](https://console.deepgram.com/)
+   - Create an API key
+
+2. **Anthropic API Key**
+   - Sign up at [https://console.anthropic.com](https://console.anthropic.com)
+   - Create an API key
 
 ### Installation
 
@@ -31,7 +52,9 @@ pip install -r requirements.txt
 
 # Create .env file
 cp .env.example .env
-# Edit .env and add your DEEPGRAM_API_KEY and DEEPGRAM_AGENT_ID
+# Edit .env and add your keys:
+# DEEPGRAM_API_KEY=your_key_here
+# ANTHROPIC_API_KEY=your_key_here
 ```
 
 ### Run Locally
@@ -40,30 +63,52 @@ cp .env.example .env
 # Start the server
 python main.py
 
-# Or with uvicorn directly
+# Or with uvicorn
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-The API will be available at `http://localhost:8000`
+API available at `http://localhost:8000`
 
 ### Test It
 
-```bash
-# Check health
-curl http://localhost:8000/health
+**1. Create an agent:**
 
-# Start a voice session
-curl -X POST http://localhost:8000/start-session \
+```bash
+curl -X POST http://localhost:8000/create-agent \
   -H "Content-Type: application/json" \
-  -d '{"metadata": {"test": true}}'
+  -d '{
+    "agent_name": "leslie_support_agent",
+    "system_prompt": "You are a friendly customer support agent for Senior Life Insurance. Your name is Leslie. Speak in a warm, polite manner and assist callers with their questions.",
+    "greeting": "Thank you for calling senior life insurance, my name is Leslie. For quality purposes this call may be recorded, may I get your first name?",
+    "voice_model": "aura-2-andromeda-en",
+    "llm_model": "claude-4-5-haiku-latest"
+  }'
 ```
 
-You should receive:
-
+Response:
 ```json
 {
-  "session_id": "vs_...",
-  "ws_url": "wss://api.deepgram.com/v1/voice/sessions/vs_.../stream?token=..."
+  "agent_id": "agent_abc123...",
+  "message": "Agent 'leslie_support_agent' created successfully"
+}
+```
+
+**2. Start a session:**
+
+```bash
+curl -X POST http://localhost:8000/start-session \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agent_id": "agent_abc123...",
+    "metadata": {"caller_id": "555-1234"}
+  }'
+```
+
+Response:
+```json
+{
+  "session_id": "session_xyz...",
+  "ws_url": "wss://api.deepgram.com/v1/voice/sessions/session_xyz.../stream?token=..."
 }
 ```
 
@@ -73,7 +118,7 @@ You should receive:
 
 ```bash
 git add .
-git commit -m "Initial commit: Deepgram Voice Agent backend"
+git commit -m "Deploy VoiceMesh to Railway"
 git push origin main
 ```
 
@@ -83,36 +128,33 @@ git push origin main
 2. Click **"New Project"**
 3. Select **"Deploy from GitHub repo"**
 4. Choose your `VoiceMesh` repository
-5. Railway will auto-detect Python and deploy
 
 ### Step 3: Configure Environment Variables
 
 In Railway → Your Service → **Variables** tab, add:
 
 - `DEEPGRAM_API_KEY` = your Deepgram API key
-- `DEEPGRAM_AGENT_ID` = your Deepgram Voice Agent ID
+- `ANTHROPIC_API_KEY` = your Anthropic API key
 
-Railway automatically sets `PORT` - no need to configure it.
+### Step 4: Generate Public Domain
 
-### Step 4: Set Start Command (if needed)
+1. Go to **Settings** → **Networking**
+2. Click **"Generate Domain"**
+3. Copy your public URL (e.g., `https://voicemesh-production.up.railway.app`)
 
-Railway should auto-detect, but if not:
-
-**Settings → Start Command:**
-
-```bash
-uvicorn main:app --host 0.0.0.0 --port $PORT
-```
-
-### Step 5: Deploy
-
-Railway will automatically deploy. Once complete:
-
-1. Go to **Settings → Generate Domain** to get a public URL
-2. Test your deployed API:
+### Step 5: Test Deployment
 
 ```bash
-curl https://your-app.up.railway.app/health
+# Set your Railway URL
+export RAILWAY_URL="https://your-app.up.railway.app"
+
+# Health check
+curl $RAILWAY_URL/health
+
+# Create an agent
+curl -X POST $RAILWAY_URL/create-agent \
+  -H "Content-Type: application/json" \
+  -d '{"agent_name": "support_agent"}'
 ```
 
 ## API Endpoints
@@ -123,121 +165,214 @@ Root endpoint with API information.
 
 ### `GET /health`
 
-Health check endpoint. Returns:
+Health check endpoint.
 
+**Response:**
 ```json
 {
   "status": "ok",
   "deepgram_api_key_set": true,
-  "deepgram_agent_id_set": true
+  "anthropic_api_key_set": true,
+  "message": "All keys configured"
 }
 ```
 
-### `POST /start-session`
+### `POST /create-agent`
 
-Create a new Deepgram Voice Agent session.
+Create a complete voice agent with STT, LLM, and TTS.
 
-**Request:**
-
+**Request Body:**
 ```json
 {
+  "agent_name": "customer_support_agent",
+  "system_prompt": "You are a helpful assistant...",
+  "greeting": "Hello! How can I help you?",
+  "voice_model": "aura-2-andromeda-en",
+  "llm_model": "claude-4-5-haiku-latest",
+  "llm_temperature": 0.7,
+  "stt_model": "flux-general-en",
+  "language": "en"
+}
+```
+
+**Response:**
+```json
+{
+  "agent_id": "agent_abc123",
+  "message": "Agent 'customer_support_agent' created successfully"
+}
+```
+
+**Available Voices:**
+- `aura-2-andromeda-en` - Female, professional (recommended for customer service)
+- `aura-2-perseus-en` - Male, professional
+- `aura-2-hera-en` - Female, warm
+- `aura-2-athena-en` - Female, clear
+- [See all voices](https://developers.deepgram.com/docs/tts-models)
+
+**Available Claude Models:**
+- `claude-4-5-haiku-latest` - Fast, cost-effective (recommended)
+- `claude-4-5-sonnet-latest` - Balanced performance
+- `claude-opus-4-latest` - Most capable
+
+### `POST /start-session`
+
+Create a session for an existing agent.
+
+**Request Body:**
+```json
+{
+  "agent_id": "agent_abc123",
   "metadata": {
-    "customer_id": "123",
-    "source": "web_app"
+    "caller_id": "555-1234",
+    "campaign": "summer_promo"
   }
 }
 ```
 
 **Response:**
-
 ```json
 {
-  "session_id": "vs_abc123...",
-  "ws_url": "wss://api.deepgram.com/v1/voice/sessions/vs_abc123.../stream?token=..."
+  "session_id": "session_xyz",
+  "ws_url": "wss://api.deepgram.com/v1/voice/sessions/session_xyz/stream?token=..."
 }
 ```
 
 ## Client Integration
 
-After getting the `ws_url` from `/start-session`, your client can:
-
-1. **Open a WebSocket** to the `ws_url`
-2. **Stream audio** (PCM, Opus, or other formats)
-3. **Receive audio** from the Voice Agent (TTS responses)
-
-### Example JavaScript Client
+### Browser Example (JavaScript)
 
 ```javascript
-// Step 1: Get session from your backend
-const response = await fetch('https://your-app.up.railway.app/start-session', {
+// Step 1: Create an agent (one-time setup)
+const agentResponse = await fetch('https://your-app.up.railway.app/create-agent', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ metadata: { user: 'john' } })
+  body: JSON.stringify({
+    agent_name: 'support_agent',
+    greeting: 'Hello! How can I help you today?',
+    system_prompt: 'You are a helpful assistant.'
+  })
 });
 
-const { ws_url } = await response.json();
+const { agent_id } = await agentResponse.json();
 
-// Step 2: Connect to Deepgram WebSocket
+// Step 2: Create a session for this agent
+const sessionResponse = await fetch('https://your-app.up.railway.app/start-session', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ agent_id })
+});
+
+const { ws_url } = await sessionResponse.json();
+
+// Step 3: Connect to WebSocket
 const ws = new WebSocket(ws_url);
 
 ws.onopen = () => {
-  console.log('Connected to Deepgram Voice Agent');
+  console.log('Connected to voice agent');
   // Start streaming audio from microphone
 };
 
 ws.onmessage = (event) => {
   // Receive TTS audio from agent
-  console.log('Received audio:', event.data);
+  const audioData = event.data;
+  // Play audio
 };
 ```
 
-## Architecture
+## Use Cases
 
+### Customer Support
+```json
+{
+  "agent_name": "support_agent",
+  "system_prompt": "You are a friendly customer support agent. Help customers with billing, technical issues, and account questions.",
+  "greeting": "Thank you for calling. How can I help you today?",
+  "voice_model": "aura-2-andromeda-en"
+}
 ```
-┌─────────┐      ┌──────────────┐      ┌─────────────┐
-│ Client  │─────▶│  VoiceMesh   │─────▶│  Deepgram   │
-│(Browser)│      │   (Railway)  │      │Voice Agent  │
-└─────────┘      └──────────────┘      └─────────────┘
-     │                                         │
-     └─────────────WebSocket──────────────────┘
+
+### Appointment Scheduling
+```json
+{
+  "agent_name": "scheduler_agent",
+  "system_prompt": "You help customers book appointments. Ask for their preferred date, time, and service needed.",
+  "greeting": "Hi! I can help you schedule an appointment. What day works best for you?",
+  "voice_model": "aura-2-hera-en"
+}
 ```
 
-1. **Client** calls VoiceMesh `/start-session`
-2. **VoiceMesh** creates session via Deepgram API
-3. **Client** connects directly to Deepgram WebSocket
-4. **Audio streams** between client and Deepgram
+### Sales Outreach
+```json
+{
+  "agent_name": "sales_agent",
+  "system_prompt": "You are an energetic sales representative. Be enthusiastic but not pushy. Focus on customer needs.",
+  "greeting": "Hi there! I'm calling to share an exciting offer that might interest you.",
+  "voice_model": "aura-2-perseus-en",
+  "llm_temperature": 0.8
+}
+```
 
-## Next Steps
+## Configuration Guide
 
-- **Add authentication** - Protect your API with API keys or JWT
-- **Add logging** - Track sessions, errors, and usage
-- **Add webhooks** - Receive events from Deepgram (call started, ended, transcripts)
-- **Phone integration** - Connect to SignalWire/Twilio/Telnyx
-- **Web UI** - Build a browser-based client
+### LLM Temperature
+- `0.0-0.3`: Deterministic, consistent responses (good for FAQ bots)
+- `0.4-0.7`: Balanced (recommended for most use cases)
+- `0.8-1.0`: Creative, varied responses (good for sales, casual conversation)
+
+### STT Models
+- `flux-general-en`: Best for conversational voice agents (recommended)
+- `nova-2`: General-purpose, high accuracy
+- [See all models](https://developers.deepgram.com/docs/models-overview)
+
+### System Prompt Tips
+1. **Be specific** about the agent's role and personality
+2. **Include constraints** (e.g., "Keep responses under 2 sentences")
+3. **Define behavior** for common scenarios
+4. **Set tone** (formal, casual, empathetic, etc.)
 
 ## Cost Estimate
 
-- **Railway**: Free tier available, paid plans start at $5/month
-- **Deepgram Voice Agent**: Pay-as-you-go (check Deepgram pricing)
+### Per Minute of Voice Call:
+- **Deepgram STT**: ~$0.0043/min
+- **Anthropic Claude Haiku**: ~$0.005/min (varies by conversation length)
+- **Deepgram TTS**: ~$0.015/min
+- **Total**: ~$0.025/min or **$1.50/hour**
+
+### Railway Hosting:
+- Free tier available
+- Paid plans start at $5/month
 
 ## Troubleshooting
 
 ### "Server misconfigured" error
+Make sure both `DEEPGRAM_API_KEY` and `ANTHROPIC_API_KEY` are set in Railway environment variables.
 
-Make sure you've set `DEEPGRAM_API_KEY` and `DEEPGRAM_AGENT_ID` in Railway environment variables.
+### "Agent created but no agent_id returned"
+Check Deepgram API response format. The API might return `id` instead of `agent_id`.
 
 ### Can't connect to WebSocket
-
-Ensure the `ws_url` from `/start-session` is valid and not expired. Sessions may have a TTL.
+Ensure the `ws_url` from `/start-session` is valid and not expired.
 
 ### CORS errors
+Update `allow_origins` in [main.py:32](main.py#L32) to include your frontend domain.
 
-If using a custom frontend domain, update the `allow_origins` list in [main.py:36](main.py#L36).
+## Next Steps
+
+- **Add phone integration** - Connect to SignalWire/Twilio/Telnyx
+- **Add webhooks** - Receive events from Deepgram (transcripts, call ended)
+- **Add logging** - Track sessions, costs, and performance
+- **Build web UI** - Browser-based voice client
+- **Add authentication** - Protect API with API keys or JWT
+
+## Documentation
+
+- **Deepgram Voice Agents**: [https://developers.deepgram.com/docs/configure-voice-agent](https://developers.deepgram.com/docs/configure-voice-agent)
+- **Anthropic Claude API**: [https://docs.anthropic.com/](https://docs.anthropic.com/)
+- **Railway Docs**: [https://docs.railway.app](https://docs.railway.app)
 
 ## Support
 
-- **Deepgram Docs**: [https://developers.deepgram.com](https://developers.deepgram.com)
-- **Railway Docs**: [https://docs.railway.app](https://docs.railway.app)
 - **Issues**: [https://github.com/kireland3517/VoiceMesh/issues](https://github.com/kireland3517/VoiceMesh/issues)
 
 ## License
