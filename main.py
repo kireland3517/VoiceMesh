@@ -1,35 +1,36 @@
 import os
-from fastapi import FastAPI, HTTPException
+import json
+import asyncio
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Optional, Any, Dict
-import httpx
+from typing import Optional, Dict, Any
+import websockets
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
 # Configuration
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-DEEPGRAM_AGENTS_URL = "https://api.deepgram.com/v1/agents"
-DEEPGRAM_SESSIONS_URL = "https://api.deepgram.com/v1/voice/sessions"
+DEEPGRAM_AGENT_WS_URL = "wss://agent.deepgram.com/agent"
 
 if not DEEPGRAM_API_KEY:
     print("WARNING: DEEPGRAM_API_KEY not set")
 if not ANTHROPIC_API_KEY:
-    print("WARNING: ANTHROPIC_API_KEY not set (required for agent creation)")
+    print("WARNING: ANTHROPIC_API_KEY not set")
 
 app = FastAPI(
-    title="VoiceMesh - Deepgram Voice Agent",
-    description="Backend for creating and managing Deepgram Voice Agents",
+    title="VoiceMesh - Deepgram Voice Agent Proxy",
+    description="WebSocket proxy for Deepgram Voice Agent with configurable AI personalities",
     version="2.0.0"
 )
 
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -40,103 +41,33 @@ app.add_middleware(
 # Request/Response Models
 # ============================================================================
 
-class CreateAgentRequest(BaseModel):
-    """Request body for creating a complete voice agent"""
-    agent_name: str = Field(default="customer_support_agent", description="Name/tag for the agent")
+class AgentConfig(BaseModel):
+    """Configuration for creating a voice agent"""
+    agent_name: str = Field(default="support_agent", description="Name for logging/identification")
     system_prompt: str = Field(
-        default="You are a friendly and helpful customer support agent. Speak in a warm, polite manner and assist callers with their questions.",
+        default="You are a helpful assistant. Speak naturally and be concise.",
         description="System prompt for the LLM"
     )
-    greeting: str = Field(
-        default="Hello! How can I help you today?",
-        description="Initial greeting when call starts"
+    greeting: Optional[str] = Field(
+        default=None,
+        description="Initial greeting when call starts (optional)"
     )
-    voice_model: str = Field(default="aura-2-andromeda-en", description="Deepgram TTS voice model")
+    voice_model: str = Field(default="aura-2-andromeda-en", description="Deepgram TTS voice")
     llm_model: str = Field(default="claude-4-5-haiku-latest", description="Anthropic Claude model")
-    llm_temperature: float = Field(default=0.7, ge=0.0, le=1.0, description="LLM temperature")
+    llm_temperature: float = Field(default=0.7, ge=0.0, le=1.0)
     stt_model: str = Field(default="flux-general-en", description="Deepgram STT model")
-    language: str = Field(default="en", description="Agent language")
-
-
-class CreateAgentResponse(BaseModel):
-    """Response after creating an agent"""
-    agent_id: str
-    message: str
-
-
-class StartSessionRequest(BaseModel):
-    """Request body for starting a session with an existing agent"""
-    agent_id: str = Field(description="The agent ID to create a session for")
-    metadata: Optional[dict] = Field(default=None, description="Optional session metadata")
-
-
-class StartSessionResponse(BaseModel):
-    """Response containing session details"""
-    session_id: str
-    ws_url: str
+    language: str = Field(default="en")
 
 
 # ============================================================================
-# Endpoints
+# Helper Functions
 # ============================================================================
 
-@app.get("/")
-async def root():
-    """Root endpoint with API information"""
-    return {
-        "name": "VoiceMesh",
-        "version": "2.0.0",
-        "description": "Deepgram Voice Agent Backend",
-        "endpoints": {
-            "health": "GET /health",
-            "create_agent": "POST /create-agent",
-            "start_session": "POST /start-session",
-        }
-    }
-
-
-@app.get("/health")
-async def health():
-    """Health check endpoint"""
-    has_deepgram_key = bool(DEEPGRAM_API_KEY)
-    has_anthropic_key = bool(ANTHROPIC_API_KEY)
-
-    return {
-        "status": "ok" if has_deepgram_key else "misconfigured",
-        "deepgram_api_key_set": has_deepgram_key,
-        "anthropic_api_key_set": has_anthropic_key,
-        "message": "All keys configured" if (has_deepgram_key and has_anthropic_key) else "Missing API keys"
-    }
-
-
-@app.post("/create-agent", response_model=CreateAgentResponse)
-async def create_agent(body: CreateAgentRequest):
-    """
-    Creates a complete Deepgram Voice Agent with STT, LLM, and TTS configuration.
-
-    This creates a full agent configuration based on the setup from the PDF:
-    - STT: Deepgram (flux-general-en)
-    - LLM: Anthropic Claude (claude-4-5-haiku-latest)
-    - TTS: Deepgram Aura (aura-2-andromeda-en)
-
-    Returns the agent_id which can be used to create sessions.
-    """
-    if not DEEPGRAM_API_KEY:
-        raise HTTPException(
-            status_code=500,
-            detail="Server misconfigured: DEEPGRAM_API_KEY not set"
-        )
-
-    if not ANTHROPIC_API_KEY:
-        raise HTTPException(
-            status_code=500,
-            detail="Server misconfigured: ANTHROPIC_API_KEY not set (required for agent creation)"
-        )
-
-    # Build the agent configuration (from the PDF)
+def build_agent_config(config: AgentConfig) -> Dict[str, Any]:
+    """Build the Deepgram Voice Agent SettingsConfiguration"""
     agent_config: Dict[str, Any] = {
         "type": "Settings",
-        "tags": ["voicemesh", body.agent_name],
+        "tags": ["voicemesh", config.agent_name],
         "audio": {
             "input": {
                 "encoding": "linear16",
@@ -149,19 +80,19 @@ async def create_agent(body: CreateAgentRequest):
             }
         },
         "agent": {
-            "language": body.language,
+            "language": config.language,
             "listen": {
                 "provider": {
                     "type": "deepgram",
-                    "model": body.stt_model,
+                    "model": config.stt_model,
                     "smart_format": False
                 }
             },
             "think": {
                 "provider": {
                     "type": "anthropic",
-                    "model": body.llm_model,
-                    "temperature": body.llm_temperature
+                    "model": config.llm_model,
+                    "temperature": config.llm_temperature
                 },
                 "endpoint": {
                     "url": "https://api.anthropic.com/v1/complete",
@@ -170,115 +101,176 @@ async def create_agent(body: CreateAgentRequest):
                         "anthropic-version": "2023-06-01"
                     }
                 },
-                "prompt": body.system_prompt
+                "prompt": config.system_prompt
             },
             "speak": {
                 "provider": {
                     "type": "deepgram",
-                    "model": body.voice_model
+                    "model": config.voice_model
                 }
-            },
-            "greeting": body.greeting
+            }
         }
     }
 
-    headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
+    # Add greeting if provided
+    if config.greeting:
+        agent_config["agent"]["greeting"] = config.greeting
 
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                DEEPGRAM_AGENTS_URL,
-                json=agent_config,
-                headers=headers,
-            )
-
-        if resp.status_code not in [200, 201]:
-            raise HTTPException(
-                status_code=resp.status_code,
-                detail=f"Deepgram API error: {resp.text}"
-            )
-
-        data = resp.json()
-        agent_id = data.get("agent_id") or data.get("id")
-
-        if not agent_id:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Agent created but no agent_id returned. Response: {data}"
-            )
-
-        return CreateAgentResponse(
-            agent_id=agent_id,
-            message=f"Agent '{body.agent_name}' created successfully"
-        )
-
-    except httpx.TimeoutException:
-        raise HTTPException(
-            status_code=504,
-            detail="Timeout connecting to Deepgram API"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Unexpected error: {str(e)}"
-        )
+    return agent_config
 
 
-@app.post("/start-session", response_model=StartSessionResponse)
-async def start_session(body: StartSessionRequest):
-    """
-    Creates a session for an existing agent and returns the WebSocket URL.
+async def proxy_to_deepgram(client_ws: WebSocket, config: AgentConfig):
+    """Proxy WebSocket connection between client and Deepgram"""
 
-    The client can then:
-    1. Connect to the ws_url via WebSocket
-    2. Stream audio to/from the Deepgram Voice Agent
-    """
     if not DEEPGRAM_API_KEY:
-        raise HTTPException(
-            status_code=500,
-            detail="Server misconfigured: DEEPGRAM_API_KEY not set"
-        )
+        await client_ws.close(code=1008, reason="Server misconfigured: DEEPGRAM_API_KEY not set")
+        return
 
-    headers = {"Authorization": f"Token {DEEPGRAM_API_KEY}"}
-    payload = {"agent_id": body.agent_id}
+    if not ANTHROPIC_API_KEY:
+        await client_ws.close(code=1008, reason="Server misconfigured: ANTHROPIC_API_KEY not set")
+        return
 
-    if body.metadata:
-        payload["metadata"] = body.metadata
+    # Build the agent configuration
+    settings_config = build_agent_config(config)
+
+    # Connect to Deepgram with API key in subprotocol
+    extra_headers = {
+        "Authorization": f"Token {DEEPGRAM_API_KEY}"
+    }
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                DEEPGRAM_SESSIONS_URL,
-                json=payload,
-                headers=headers,
+        async with websockets.connect(
+            DEEPGRAM_AGENT_WS_URL,
+            extra_headers=extra_headers,
+            ping_interval=20,
+            ping_timeout=10
+        ) as deepgram_ws:
+
+            print(f"Connected to Deepgram for agent: {config.agent_name}")
+
+            # Send SettingsConfiguration to Deepgram
+            await deepgram_ws.send(json.dumps(settings_config))
+            print(f"Sent SettingsConfiguration for {config.agent_name}")
+
+            # Create tasks for bidirectional proxying
+            async def client_to_deepgram():
+                """Forward messages from client to Deepgram"""
+                try:
+                    while True:
+                        # Receive from client (can be text or binary)
+                        data = await client_ws.receive()
+
+                        if "text" in data:
+                            await deepgram_ws.send(data["text"])
+                        elif "bytes" in data:
+                            await deepgram_ws.send(data["bytes"])
+
+                except WebSocketDisconnect:
+                    print(f"Client disconnected: {config.agent_name}")
+                except Exception as e:
+                    print(f"Error in client_to_deepgram: {e}")
+
+            async def deepgram_to_client():
+                """Forward messages from Deepgram to client"""
+                try:
+                    async for message in deepgram_ws:
+                        if isinstance(message, bytes):
+                            await client_ws.send_bytes(message)
+                        else:
+                            await client_ws.send_text(message)
+
+                except websockets.exceptions.ConnectionClosed:
+                    print(f"Deepgram connection closed: {config.agent_name}")
+                except Exception as e:
+                    print(f"Error in deepgram_to_client: {e}")
+
+            # Run both directions concurrently
+            await asyncio.gather(
+                client_to_deepgram(),
+                deepgram_to_client(),
+                return_exceptions=True
             )
 
-        if resp.status_code != 200:
-            raise HTTPException(
-                status_code=resp.status_code,
-                detail=f"Deepgram API error: {resp.text}"
-            )
-
-        data = resp.json()
-        return StartSessionResponse(
-            session_id=data["session_id"],
-            ws_url=data["ws_url"],
-        )
-
-    except httpx.TimeoutException:
-        raise HTTPException(
-            status_code=504,
-            detail="Timeout connecting to Deepgram API"
-        )
-    except HTTPException:
-        raise
+    except websockets.exceptions.WebSocketException as e:
+        print(f"WebSocket error: {e}")
+        await client_ws.close(code=1011, reason=f"Deepgram connection failed: {str(e)}")
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Unexpected error: {str(e)}"
-        )
+        print(f"Unexpected error: {e}")
+        await client_ws.close(code=1011, reason=f"Server error: {str(e)}")
+
+
+# ============================================================================
+# Endpoints
+# ============================================================================
+
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "name": "VoiceMesh",
+        "version": "2.0.0",
+        "description": "WebSocket Proxy for Deepgram Voice Agents",
+        "endpoints": {
+            "health": "GET /health",
+            "voice_agent": "WS /agent (with query params for config)",
+            "docs": "GET /docs (Swagger UI)"
+        },
+        "example": "ws://localhost:8000/agent?agent_name=leslie&greeting=Hello!&system_prompt=You+are+Leslie"
+    }
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint"""
+    has_deepgram = bool(DEEPGRAM_API_KEY)
+    has_anthropic = bool(ANTHROPIC_API_KEY)
+
+    return {
+        "status": "ok" if (has_deepgram and has_anthropic) else "misconfigured",
+        "deepgram_api_key_set": has_deepgram,
+        "anthropic_api_key_set": has_anthropic,
+        "websocket_url": DEEPGRAM_AGENT_WS_URL
+    }
+
+
+@app.websocket("/agent")
+async def voice_agent_websocket(
+    websocket: WebSocket,
+    agent_name: str = "support_agent",
+    system_prompt: str = "You are a helpful assistant. Speak naturally and be concise.",
+    greeting: Optional[str] = None,
+    voice_model: str = "aura-2-andromeda-en",
+    llm_model: str = "claude-4-5-haiku-latest",
+    llm_temperature: float = 0.7,
+    stt_model: str = "flux-general-en",
+    language: str = "en"
+):
+    """
+    WebSocket endpoint for voice agent connections.
+
+    Client connects here, and VoiceMesh proxies to Deepgram Voice Agent API
+    with the specified configuration.
+
+    Example connection:
+    ws://localhost:8000/agent?agent_name=leslie&greeting=Hello!&system_prompt=You are Leslie
+    """
+    await websocket.accept()
+    print(f"Client connected: {agent_name}")
+
+    # Build config from query parameters
+    config = AgentConfig(
+        agent_name=agent_name,
+        system_prompt=system_prompt,
+        greeting=greeting,
+        voice_model=voice_model,
+        llm_model=llm_model,
+        llm_temperature=llm_temperature,
+        stt_model=stt_model,
+        language=language
+    )
+
+    # Proxy the connection
+    await proxy_to_deepgram(websocket, config)
 
 
 if __name__ == "__main__":
