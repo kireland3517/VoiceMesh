@@ -53,13 +53,12 @@ async def startup_event():
         port=settings.PORT,
     )
 
-    # Initialize database (in production, migrations should handle this)
-    if settings.is_development:
-        try:
-            await init_db()
-            logger.info("database_initialized")
-        except Exception as e:
-            logger.error("database_init_failed", error=str(e))
+    # Initialize database tables (create_all is idempotent - safe to run in production)
+    try:
+        await init_db()
+        logger.info("database_initialized", env=settings.ENV)
+    except Exception as e:
+        logger.error("database_init_failed", error=str(e), env=settings.ENV)
 
 
 @app.on_event("shutdown")
