@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VoiceMesh Test Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+        }
+        label {
+            display: block;
+            margin-top: 15px;
+            font-weight: bold;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            margin-top: 5px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            box-sizing: border-box;
+        }
+        textarea {
+            min-height: 80px;
+            font-family: Arial, sans-serif;
+        }
+        button {
+            margin-top: 20px;
+            padding: 12px 30px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .disconnect {
+            background: #f44336;
+        }
+        .disconnect:hover {
+            background: #da190b;
+        }
+        #status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        .disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .connecting {
+            background: #fff3cd;
+            color: #856404;
+        }
+        #log {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f9f9f9;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        .log-entry {
+            margin: 5px 0;
+            padding: 3px;
+        }
+        .log-sent {
+            color: #0066cc;
+        }
+        .log-received {
+            color: #009900;
+        }
+        .log-error {
+            color: #cc0000;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎙️ VoiceMesh Test Client</h1>
+        <p>Test your VoiceMesh WebSocket proxy connection</p>
+
+        <label for="wsUrl">VoiceMesh WebSocket URL:</label>
+        <input type="text" id="wsUrl" value="ws://localhost:8000/agent" placeholder="ws://localhost:8000/agent">
+
+        <label for="agentName">Agent Name:</label>
+        <input type="text" id="agentName" value="leslie" placeholder="leslie_support_agent">
+
+        <label for="systemPrompt">System Prompt:</label>
+        <textarea id="systemPrompt" placeholder="You are a helpful assistant...">You are a friendly and helpful customer support agent for Senior Life Insurance. Your name is Leslie, and you speak in a warm, polite manner. Assist callers with their life insurance questions or requests, providing clear and empathetic responses.</textarea>
+
+        <label for="greeting">Greeting (optional):</label>
+        <input type="text" id="greeting" value="Thank you for calling senior life insurance, my name is Leslie. For quality purposes this call may be recorded, may I get your first name?" placeholder="Hello! How can I help you today?">
+
+        <label for="voiceModel">Voice Model:</label>
+        <input type="text" id="voiceModel" value="aura-2-andromeda-en" placeholder="aura-2-andromeda-en">
+
+        <button id="connectBtn" onclick="connect()">Connect to Voice Agent</button>
+        <button id="disconnectBtn" onclick="disconnect()" style="display:none;" class="disconnect">Disconnect</button>
+
+        <div id="status" class="disconnected">Status: Disconnected</div>
+
+        <div id="log"></div>
+    </div>
+
+    <script>
+        let ws = null;
+
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function updateStatus(message, className) {
+            const status = document.getElementById('status');
+            status.textContent = `Status: ${message}`;
+            status.className = className;
+        }
+
+        function connect() {
+            const wsUrl = document.getElementById('wsUrl').value;
+            const agentName = document.getElementById('agentName').value;
+            const systemPrompt = document.getElementById('systemPrompt').value;
+            const greeting = document.getElementById('greeting').value;
+            const voiceModel = document.getElementById('voiceModel').value;
+
+            // Build WebSocket URL with query parameters
+            const params = new URLSearchParams({
+                agent_name: agentName,
+                system_prompt: systemPrompt,
+                voice_model: voiceModel
+            });
+
+            if (greeting) {
+                params.append('greeting', greeting);
+            }
+
+            const fullUrl = `${wsUrl}?${params.toString()}`;
+
+            log(`Connecting to ${fullUrl}...`);
+            updateStatus('Connecting...', 'connecting');
+
+            ws = new WebSocket(fullUrl);
+
+            ws.onopen = () => {
+                log('✅ Connected to VoiceMesh!', 'received');
+                updateStatus('Connected', 'connected');
+                document.getElementById('connectBtn').style.display = 'none';
+                document.getElementById('disconnectBtn').style.display = 'inline-block';
+            };
+
+            ws.onmessage = (event) => {
+                if (event.data instanceof Blob) {
+                    log(`📥 Received audio data: ${event.data.size} bytes`, 'received');
+                } else {
+                    log(`📥 Received: ${event.data}`, 'received');
+                }
+            };
+
+            ws.onerror = (error) => {
+                log(`❌ WebSocket error: ${error}`, 'error');
+                updateStatus('Error', 'disconnected');
+            };
+
+            ws.onclose = () => {
+                log('Connection closed', 'error');
+                updateStatus('Disconnected', 'disconnected');
+                document.getElementById('connectBtn').style.display = 'inline-block';
+                document.getElementById('disconnectBtn').style.display = 'none';
+                ws = null;
+            };
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                log('Disconnecting...', 'info');
+            }
+        }
+
+        // Test: Send a text message (for testing)
+        window.sendText = function(text) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(text);
+                log(`📤 Sent: ${text}`, 'sent');
+            } else {
+                log('❌ Not connected', 'error');
+            }
+        };
+
+        // Add note about audio
+        log('💡 Note: This is a basic test client. For actual audio streaming, you need to capture microphone audio and send it as binary data.');
+        log('💡 You can test text messages by opening the browser console and calling: sendText("test message")');
+    </script>
+</body>
+</html>
