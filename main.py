@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+import base64
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
@@ -9,6 +10,9 @@ from typing import Optional, Dict, Any
 import websockets
 from dotenv import load_dotenv
 
+# Anthropic SDK for Claude
+from anthropic import AsyncAnthropic
+
 # Load environment variables
 load_dotenv()
 
@@ -16,11 +20,15 @@ load_dotenv()
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 DEEPGRAM_AGENT_WS_URL = "wss://agent.deepgram.com/agent"
+DEEPGRAM_TTS_WS_URL = "wss://api.deepgram.com/v1/speak?encoding=mulaw&sample_rate=8000&container=none"
 
 if not DEEPGRAM_API_KEY:
     print("WARNING: DEEPGRAM_API_KEY not set")
 if not ANTHROPIC_API_KEY:
     print("WARNING: ANTHROPIC_API_KEY not set")
+
+# Initialize Anthropic client
+anthropic_client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 
 app = FastAPI(
     title="VoiceMesh - Deepgram Voice Agent Proxy",
@@ -58,6 +66,336 @@ class AgentConfig(BaseModel):
     llm_temperature: float = Field(default=0.7, ge=0.0, le=1.0)
     stt_model: str = Field(default="flux-general-en", description="Deepgram STT model")
     language: str = Field(default="en")
+
+
+# ============================================================================
+# SignalWire Media Streams Bridge
+# ============================================================================
+
+class SignalWireMediaBridge:
+    """
+    Bridge between SignalWire Media Streams and Deepgram STT + Claude + Deepgram TTS.
+
+    SignalWire Protocol:
+    - Receives JSON messages with base64 mulaw audio @ 8kHz
+    - Sends JSON messages with base64 mulaw audio @ 8kHz
+
+    Deepgram STT:
+    - Receives raw mulaw audio @ 8kHz (no conversion needed!)
+    - Returns transcriptions via events
+
+    Claude:
+    - Receives transcriptions
+    - Returns streaming text responses
+
+    Deepgram TTS:
+    - Receives text chunks via WebSocket
+    - Returns raw mulaw audio @ 8kHz
+    - Encoded to base64 and sent to SignalWire
+    """
+
+    def __init__(self, signalwire_ws: WebSocket, system_prompt: str, greeting: str, voice_model: str):
+        self.signalwire_ws = signalwire_ws
+        self.system_prompt = system_prompt
+        self.greeting = greeting
+        self.voice_model = voice_model
+
+        # State
+        self.stream_sid = None
+        self.speaking = False
+        self.conversation_history = []
+
+        # Deepgram STT WebSocket
+        self.stt_ws = None
+
+        # Deepgram TTS WebSocket
+        self.tts_ws = None
+
+        # Transcript accumulation
+        self.is_finals = []
+
+    async def start(self):
+        """Start the Media Stream bridge"""
+        print("🚀 Starting Media Stream bridge...")
+
+        # Connect to Deepgram STT
+        await self.setup_deepgram_stt()
+
+        # Connect to Deepgram TTS
+        await self.setup_deepgram_tts()
+
+        # Send greeting if provided
+        if self.greeting:
+            print(f"👋 Sending greeting...")
+            await self.speak(self.greeting)
+
+        # Start listening to SignalWire messages
+        await self.listen_to_signalwire()
+
+    async def setup_deepgram_stt(self):
+        """Connect to Deepgram STT via WebSocket"""
+        try:
+            # Build STT WebSocket URL with parameters
+            stt_url = (
+                "wss://api.deepgram.com/v1/listen"
+                "?model=nova-2-phonecall"
+                "&language=en"
+                "&smart_format=true"
+                "&encoding=mulaw"
+                "&sample_rate=8000"
+                "&channels=1"
+                "&interim_results=true"
+                "&endpointing=300"
+                "&utterance_end_ms=1000"
+            )
+
+            extra_headers = {
+                "Authorization": f"Token {DEEPGRAM_API_KEY}"
+            }
+
+            self.stt_ws = await websockets.connect(stt_url, extra_headers=extra_headers)
+            print("✅ Deepgram STT connected")
+
+            # Start task to listen for transcriptions
+            asyncio.create_task(self.listen_to_stt())
+
+        except Exception as e:
+            print(f"❌ Failed to connect to Deepgram STT: {e}")
+            raise
+
+    async def setup_deepgram_tts(self):
+        """Connect to Deepgram TTS WebSocket"""
+        try:
+            extra_headers = {
+                "Authorization": f"Token {DEEPGRAM_API_KEY}"
+            }
+
+            self.tts_ws = await websockets.connect(
+                DEEPGRAM_TTS_WS_URL,
+                extra_headers=extra_headers
+            )
+
+            print("✅ Deepgram TTS connected")
+
+            # Start task to listen for TTS audio
+            asyncio.create_task(self.listen_to_tts())
+
+        except Exception as e:
+            print(f"❌ Failed to connect to Deepgram TTS: {e}")
+            raise
+
+    async def listen_to_signalwire(self):
+        """Listen for messages from SignalWire"""
+        try:
+            while True:
+                message = await self.signalwire_ws.receive_text()
+                data = json.loads(message)
+                event = data.get("event")
+
+                if event == "connected":
+                    print(f"📱 SignalWire connected: {data}")
+
+                elif event == "start":
+                    print(f"▶️  Call started: {data}")
+                    self.stream_sid = data.get("streamSid")
+
+                elif event == "media":
+                    # Decode base64 mulaw audio
+                    if not self.stream_sid:
+                        self.stream_sid = data.get("streamSid")
+
+                    if data["media"]["track"] == "inbound":
+                        payload = data["media"]["payload"]
+                        audio_bytes = base64.b64decode(payload)
+
+                        # Send raw mulaw audio to Deepgram STT
+                        if self.stt_ws:
+                            await self.stt_ws.send(audio_bytes)
+
+                elif event == "mark":
+                    print(f"✓ Mark event: {data}")
+
+                elif event == "close":
+                    print(f"🔚 Call ended: {data}")
+                    break
+
+        except WebSocketDisconnect:
+            print("📞 SignalWire disconnected")
+        except Exception as e:
+            print(f"❌ Error in SignalWire listener: {e}")
+        finally:
+            await self.cleanup()
+
+    async def listen_to_tts(self):
+        """Listen for audio from Deepgram TTS"""
+        try:
+            async for message in self.tts_ws:
+                # Check if it's JSON (metadata) or binary (audio)
+                try:
+                    # Try parsing as JSON
+                    json_data = json.loads(message)
+                    print(f"🎙️  TTS metadata: {json_data}")
+                    continue
+                except (json.JSONDecodeError, TypeError):
+                    # It's binary audio data
+                    pass
+
+                # Only send audio if we're speaking
+                if self.speaking and isinstance(message, bytes):
+                    # Encode to base64
+                    payload = base64.b64encode(message).decode('utf-8')
+
+                    # Send to SignalWire
+                    await self.signalwire_ws.send_json({
+                        "event": "media",
+                        "streamSid": self.stream_sid,
+                        "media": {
+                            "payload": payload
+                        }
+                    })
+
+        except Exception as e:
+            print(f"❌ Error in TTS listener: {e}")
+
+    async def listen_to_stt(self):
+        """Listen for transcriptions from Deepgram STT"""
+        try:
+            async for message in self.stt_ws:
+                # Parse JSON transcription response
+                data = json.loads(message)
+
+                # Check for transcript
+                if "channel" in data:
+                    channel = data["channel"]
+                    if "alternatives" in channel and len(channel["alternatives"]) > 0:
+                        transcript = channel["alternatives"][0].get("transcript", "")
+
+                        if transcript:
+                            is_final = data.get("is_final", False)
+                            speech_final = data.get("speech_final", False)
+
+                            if is_final:
+                                self.is_finals.append(transcript)
+
+                                if speech_final:
+                                    # Complete utterance
+                                    utterance = " ".join(self.is_finals)
+                                    self.is_finals = []
+
+                                    print(f"\n👤 User: {utterance}")
+
+                                    # Stop speaking if user interrupts (barge-in)
+                                    if self.speaking:
+                                        print("🛑 Barge-in detected, clearing audio")
+                                        await self.clear_audio()
+
+                                    # Send to Claude for response
+                                    await self.get_claude_response(utterance)
+
+                                else:
+                                    print(f"📝 [Is Final] {transcript}")
+                            else:
+                                # Interim result - handle barge-in
+                                if self.speaking:
+                                    print(f"🛑 User speaking, clearing audio")
+                                    await self.clear_audio()
+
+        except Exception as e:
+            print(f"❌ Error in STT listener: {e}")
+
+    async def get_claude_response(self, user_message: str):
+        """Get streaming response from Claude"""
+        try:
+            # Add user message to history
+            self.conversation_history.append({
+                "role": "user",
+                "content": user_message
+            })
+
+            # Start speaking
+            self.speaking = True
+
+            print(f"🤖 Claude: ", end="", flush=True)
+
+            # Stream response from Claude
+            async with anthropic_client.messages.stream(
+                model="claude-4-5-haiku-latest",
+                max_tokens=1024,
+                system=self.system_prompt,
+                messages=self.conversation_history,
+            ) as stream:
+                assistant_response = ""
+
+                async for text in stream.text_stream:
+                    print(text, end="", flush=True)
+                    assistant_response += text
+
+                    # Send each chunk to TTS
+                    if self.tts_ws and self.speaking:
+                        await self.tts_ws.send(json.dumps({
+                            "type": "Speak",
+                            "text": text
+                        }))
+
+            print()  # New line after response
+
+            # Add assistant response to history
+            self.conversation_history.append({
+                "role": "assistant",
+                "content": assistant_response
+            })
+
+            # Flush TTS (tell it we're done)
+            if self.tts_ws:
+                await self.tts_ws.send(json.dumps({"type": "Flush"}))
+
+        except Exception as e:
+            print(f"❌ Error getting Claude response: {e}")
+            self.speaking = False
+
+    async def speak(self, text: str):
+        """Send text to TTS and play to caller"""
+        try:
+            self.speaking = True
+
+            if self.tts_ws:
+                # Send text to TTS
+                await self.tts_ws.send(json.dumps({
+                    "type": "Speak",
+                    "text": text
+                }))
+
+                # Flush
+                await self.tts_ws.send(json.dumps({"type": "Flush"}))
+
+        except Exception as e:
+            print(f"❌ Error in speak: {e}")
+            self.speaking = False
+
+    async def clear_audio(self):
+        """Clear audio buffer (barge-in)"""
+        self.speaking = False
+
+        # Clear SignalWire audio buffer
+        if self.stream_sid:
+            await self.signalwire_ws.send_json({
+                "event": "clear",
+                "streamSid": self.stream_sid
+            })
+
+        # Clear TTS buffer
+        if self.tts_ws:
+            await self.tts_ws.send(json.dumps({"type": "Clear"}))
+
+    async def cleanup(self):
+        """Clean up connections"""
+        print("🧹 Cleaning up connections...")
+
+        if self.stt_ws:
+            await self.stt_ws.close()
+
+        if self.tts_ws:
+            await self.tts_ws.close()
 
 
 # ============================================================================
@@ -277,28 +615,31 @@ async def voice_agent_websocket(
 @app.websocket("/agent/signalwire")
 async def signalwire_voice_agent(websocket: WebSocket):
     """
-    Dedicated WebSocket endpoint for SignalWire Media Streams.
+    SignalWire Media Streams WebSocket endpoint.
 
-    Pre-configured with Leslie's settings since SignalWire doesn't support
-    query parameters in Stream URLs.
+    Handles incoming calls with SignalWire's JSON protocol:
+    - Receives base64 mulaw audio from SignalWire
+    - Streams to Deepgram STT for transcription
+    - Sends transcripts to Claude for responses
+    - Converts Claude responses to speech via Deepgram TTS
+    - Sends audio back to SignalWire
     """
     await websocket.accept()
-    print(f"SignalWire call connected")
+    print("📞 SignalWire Media Stream connected")
 
-    # Leslie's configuration (hard-coded for SignalWire)
-    config = AgentConfig(
-        agent_name="leslie",
+    # Initialize Media Stream bridge
+    bridge = SignalWireMediaBridge(
+        signalwire_ws=websocket,
         system_prompt="You are a friendly and helpful customer support agent for Senior Life Insurance. Your name is Leslie, and you speak in a warm, polite manner. Assist callers with their life insurance questions or requests, providing clear and empathetic responses.",
         greeting="Thank you for calling senior life insurance, my name is Leslie. For quality purposes this call may be recorded, may I get your first name?",
-        voice_model="aura-2-andromeda-en",
-        llm_model="claude-4-5-haiku-latest",
-        llm_temperature=0.7,
-        stt_model="flux-general-en",
-        language="en"
+        voice_model="aura-2-andromeda-en"
     )
 
-    # Proxy the connection
-    await proxy_to_deepgram(websocket, config)
+    try:
+        await bridge.start()
+    except Exception as e:
+        print(f"❌ Error in Media Stream bridge: {e}")
+        await websocket.close()
 
 
 @app.post("/signalwire/incoming")
