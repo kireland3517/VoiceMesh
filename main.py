@@ -181,7 +181,7 @@ class SignalWireMediaBridge:
                     # Send greeting now that we have stream_sid
                     if self.greeting:
                         print(f"👋 Sending greeting...")
-                        await self.speak(self.greeting)
+                        asyncio.create_task(self.speak(self.greeting))
 
                 elif event == "media":
                     # Decode base64 mulaw audio
@@ -243,8 +243,8 @@ class SignalWireMediaBridge:
                                         print("🛑 Barge-in detected, clearing audio")
                                         await self.clear_audio()
 
-                                    # Send to Claude for response
-                                    await self.get_claude_response(utterance)
+                                    # Send to Claude for response (run in background to not block audio)
+                                    asyncio.create_task(self.get_claude_response(utterance))
 
                                 else:
                                     print(f"📝 [Is Final] {transcript}")
