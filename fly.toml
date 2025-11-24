@@ -4,6 +4,10 @@
 app = "voicemesh"
 primary_region = "iad"  # US East (Ashburn, Virginia)
 
+# Graceful shutdown configuration to prevent call drops during deployments
+kill_signal = "SIGTERM"
+kill_timeout = "120s"  # Allow up to 2 minutes for ongoing calls to complete
+
 [build]
   dockerfile = "Dockerfile"
 
@@ -18,7 +22,7 @@ primary_region = "iad"  # US East (Ashburn, Virginia)
   force_https = true
   auto_stop_machines = false  # Keep warm for real-time voice
   auto_start_machines = true
-  min_machines_running = 1    # Always at least 1 instance up
+  min_machines_running = 2    # Run 2 instances to handle deployments gracefully
   processes = ["app"]
 
   [http_service.concurrency]

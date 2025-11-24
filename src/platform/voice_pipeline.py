@@ -15,8 +15,7 @@ import structlog
 # To enable: pip install pipecat-ai[silero] and uncomment below
 # from pipecat.vad.silero import SileroVADAnalyzer
 
-from pipecat.services.cartesia import CartesiaTTSService
-
+from src.platform.cartesia_tts import CartesiaTTSService
 from src.api.config import settings
 from src.api.models import Customer, Function
 
@@ -79,48 +78,6 @@ class VoiceMeshPipeline:
         self.cartesia_speed = self.cartesia_config.get("speed", None)
         self.cartesia_emotion = self.cartesia_config.get("emotion", None)
 
-    async def _test_cartesia_connection(self) -> bool:
-        """
-        Test connection to Cartesia WebSocket before creating the service.
-        
-        Returns:
-            True if connection successful, raises RuntimeError if failed
-        """
-        try:
-            import websockets
-            
-            logger.info("testing_cartesia_connection", customer_id=self.customer.id)
-            
-            # Test basic connection to Cartesia WebSocket
-            test_ws = await asyncio.wait_for(
-                websockets.connect(
-                    "wss://api.cartesia.ai/tts/websocket",
-                    extra_headers={"X-API-Key": settings.CARTESIA_API_KEY}
-                ),
-                timeout=5  # 5 second timeout for connection test
-            )
-            await test_ws.close()
-            
-            logger.info("cartesia_connection_test_passed", customer_id=self.customer.id)
-            return True
-            
-        except asyncio.TimeoutError:
-            logger.error(
-                "cartesia_connection_timeout",
-                customer_id=self.customer.id,
-                message="Cartesia WebSocket connection timed out"
-            )
-            raise RuntimeError("TTS service connection timeout") from None
-            
-        except Exception as e:
-            logger.error(
-                "cartesia_connection_failed",
-                customer_id=self.customer.id,
-                error=str(e),
-                error_type=type(e).__name__
-            )
-            raise RuntimeError(f"TTS service unavailable: {str(e)}") from e
-
     async def setup_pipeline(
         self,
         room_url: str,
@@ -141,10 +98,7 @@ class VoiceMeshPipeline:
             room_url=room_url
         )
 
-        # 1. Test Cartesia connection BEFORE setting up the pipeline
-        await self._test_cartesia_connection()
-
-        # 2. Transport (Daily.co with container-friendly configuration)
+        # 1. Transport (Daily.co with container-friendly configuration)
         # Note: VAD disabled for now (Silero requires heavy ML dependencies)
         transport = DailyTransport(
             room_url,
@@ -186,24 +140,17 @@ class VoiceMeshPipeline:
             system=self.get_system_prompt()
         )
 
-        # 5. Text-to-Speech (Cartesia with custom configuration)
-        # Connection test passed, so we can safely create the service
-        # Build params for voice customization
-        params_config = {}
-        if self.cartesia_speed or self.cartesia_emotion:
-            generation_config = {}
-            if self.cartesia_speed:
-                generation_config["speed"] = self.cartesia_speed
-            if self.cartesia_emotion:
-                generation_config["emotion"] = self.cartesia_emotion
-            params_config["generation_config"] = generation_config
-
+        # 5. Text-to-Speech (Custom HTTP-based Cartesia service)
+        # Uses HTTP streaming instead of WebSocket for better reliability
         logger.info("creating_cartesia_tts_service", customer_id=self.customer.id)
         tts_service = CartesiaTTSService(
             api_key=settings.CARTESIA_API_KEY,
             voice_id=self.cartesia_voice_id,
-            model=self.cartesia_model,
-            params=CartesiaTTSService.InputParams(**params_config) if params_config else None
+            model_id=self.cartesia_model,
+            language=self.deepgram_language,
+            speed=self.cartesia_speed or 1.0,
+            emotion=self.cartesia_emotion,
+            sample_rate=16000
         )
 
         # 6. Build the pipeline
