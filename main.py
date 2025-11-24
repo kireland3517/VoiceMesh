@@ -358,14 +358,16 @@ class SignalWireMediaBridge:
     async def speak(self, text: str):
         """Send text to Cartesia TTS via HTTP and play to caller"""
         try:
-            # Build Cartesia TTS request
+            # Build Cartesia TTS request with southern warmth
             # SignalWire expects L16 @ 24kHz (PCM16)
             tts_request = {
                 "model_id": "sonic-english",
                 "transcript": text,
                 "voice": {
                     "mode": "id",
-                    "id": CARTESIA_VOICE_ID
+                    "id": CARTESIA_VOICE_ID,
+                    "emotion": ["positivity:high", "curiosity:high"],
+                    "speed": "normal"
                 },
                 "output_format": {
                     "container": "raw",
@@ -727,8 +729,8 @@ async def signalwire_voice_agent(websocket: WebSocket):
     # Initialize Media Stream bridge
     bridge = SignalWireMediaBridge(
         signalwire_ws=websocket,
-        system_prompt="You are Caroline, a warm and friendly customer support agent for Senior Life Insurance with a charming Southern personality. Speak naturally with Southern expressions like 'y'all', 'honey', 'sweetie', 'bless your heart', and 'darlin'' when appropriate. Be genuinely helpful and empathetic while maintaining that warm Southern hospitality. Keep responses conversational and friendly.",
-        greeting="Well hello there! Thank you for calling Senior Life Insurance, my name is Caroline. For quality purposes, this call may be recorded. May I get your first name, honey?"
+        system_prompt="You are Caroline, a warm and delightful customer support agent for Senior Life Insurance with authentic Southern charm. You grew up in the South and naturally use Southern expressions throughout your speech. Sprinkle in phrases like 'Well bless your heart', 'honey', 'sweetie', 'darlin'', 'sugar', 'y'all', 'I do declare', 'as happy as a clam', 'might could', and 'fixin' to'. Be genuinely caring and empathetic - treat each caller like family. Keep your responses warm, conversational, and friendly, like you're chatting with a neighbor over sweet tea on the porch. Never sound robotic or scripted.",
+        greeting="Well hey there, honey! Thank you so much for callin' Senior Life Insurance - my name's Caroline and I'm just tickled pink to help you today! Now darlin', this call may be recorded for quality purposes. May I get your first name, sweetie?"
     )
 
     try:
