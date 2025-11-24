@@ -346,7 +346,8 @@ class SignalWireMediaBridge:
 
                     # Send each chunk to Cartesia TTS
                     if self.tts_ws and self.speaking:
-                        await self.tts_ws.send(json.dumps({
+                        # Build request - only include context_id if we have one
+                        tts_request = {
                             "model_id": "sonic-english",
                             "transcript": text,
                             "voice": {
@@ -357,10 +358,14 @@ class SignalWireMediaBridge:
                                 "container": "raw",
                                 "encoding": "pcm_s16le",
                                 "sample_rate": 24000
-                            },
-                            "context_id": self.context_id,
-                            "continue": True
-                        }))
+                            }
+                        }
+
+                        if self.context_id:
+                            tts_request["context_id"] = self.context_id
+                            tts_request["continue"] = True
+
+                        await self.tts_ws.send(json.dumps(tts_request))
 
             print()  # New line after response
 
@@ -387,8 +392,8 @@ class SignalWireMediaBridge:
             self.speaking = True
 
             if self.tts_ws:
-                # Send text to Cartesia TTS
-                await self.tts_ws.send(json.dumps({
+                # Build request - only include context_id if we have one
+                tts_request = {
                     "model_id": "sonic-english",
                     "transcript": text,
                     "voice": {
@@ -399,9 +404,14 @@ class SignalWireMediaBridge:
                         "container": "raw",
                         "encoding": "pcm_s16le",
                         "sample_rate": 24000
-                    },
-                    "context_id": self.context_id
-                }))
+                    }
+                }
+
+                if self.context_id:
+                    tts_request["context_id"] = self.context_id
+
+                # Send text to Cartesia TTS
+                await self.tts_ws.send(json.dumps(tts_request))
 
         except Exception as e:
             print(f"❌ Error in speak: {e}")
