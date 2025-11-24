@@ -259,7 +259,12 @@ class SignalWireMediaBridge:
                         if "context_id" in json_data:
                             self.context_id = json_data["context_id"]
 
-                        print(f"🎙️  Cartesia TTS: {json_data.get('type', 'message')}")
+                        msg_type = json_data.get('type', 'message')
+                        print(f"🎙️  Cartesia TTS: {msg_type}")
+
+                        # Log full error details if it's an error
+                        if msg_type == "error":
+                            print(f"❌ Cartesia Error Details: {json.dumps(json_data, indent=2)}")
                     except json.JSONDecodeError:
                         print(f"⚠️  Unexpected text message: {message}")
 
