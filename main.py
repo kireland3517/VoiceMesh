@@ -1,8 +1,9 @@
 import os
 import json
 import asyncio
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
 import websockets
@@ -271,6 +272,55 @@ async def voice_agent_websocket(
 
     # Proxy the connection
     await proxy_to_deepgram(websocket, config)
+
+
+@app.post("/signalwire/incoming")
+async def signalwire_incoming_call(request: Request):
+    """
+    SignalWire webhook for incoming calls.
+
+    Configure this URL in SignalWire phone number settings:
+    https://your-railway-app.up.railway.app/signalwire/incoming
+
+    Returns TwiML that connects the call to VoiceMesh WebSocket.
+    """
+    # Get form data from SignalWire
+    form_data = await request.form()
+    caller = form_data.get("From", "unknown")
+    called = form_data.get("To", "unknown")
+    call_sid = form_data.get("CallSid", "unknown")
+
+    print(f"📞 Incoming call: {caller} → {called} (SID: {call_sid})")
+
+    # Get the base URL of this server
+    base_url = str(request.base_url).replace("http://", "wss://").replace("https://", "wss://")
+    if base_url.endswith("/"):
+        base_url = base_url[:-1]
+
+    # Build WebSocket URL with Leslie configuration
+    ws_url = (
+        f"{base_url}/agent?"
+        f"agent_name=leslie&"
+        f"system_prompt=You+are+a+friendly+and+helpful+customer+support+agent+for+Senior+Life+Insurance.+Your+name+is+Leslie,+and+you+speak+in+a+warm,+polite+manner.+Assist+callers+with+their+life+insurance+questions+or+requests,+providing+clear+and+empathetic+responses.&"
+        f"greeting=Thank+you+for+calling+senior+life+insurance,+my+name+is+Leslie.+For+quality+purposes+this+call+may+be+recorded,+may+I+get+your+first+name?&"
+        f"voice_model=aura-2-andromeda-en"
+    )
+
+    # Return TwiML that connects to our WebSocket
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Connect>
+        <Stream url="{ws_url}">
+            <Parameter name="caller" value="{caller}" />
+            <Parameter name="called" value="{called}" />
+            <Parameter name="call_sid" value="{call_sid}" />
+        </Stream>
+    </Connect>
+</Response>"""
+
+    print(f"🔗 Connecting call to: {ws_url}")
+
+    return Response(content=twiml, media_type="application/xml")
 
 
 if __name__ == "__main__":
