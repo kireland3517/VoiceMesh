@@ -4,13 +4,13 @@ import asyncio
 import aiohttp
 from typing import AsyncGenerator, Optional
 from pipecat.frames.frames import Frame, AudioRawFrame, ErrorFrame
-from pipecat.services.tts_service import TTSService
+from pipecat.processors.frame_processor import FrameProcessor
 import structlog
 
 logger = structlog.get_logger()
 
 
-class CartesiaTTSService(TTSService):
+class CartesiaTTSService(FrameProcessor):
     """
     Cartesia Text-to-Speech service for Pipecat.
 
@@ -63,9 +63,8 @@ class CartesiaTTSService(TTSService):
         self.base_url = "https://api.cartesia.ai/v1"
         self._session: Optional[aiohttp.ClientSession] = None
 
-    async def start(self):
+    async def start(self, frame):
         """Start the service and create HTTP session."""
-        await super().start()
         self._session = aiohttp.ClientSession(
             headers={
                 "X-API-Key": self.api_key,
@@ -73,12 +72,21 @@ class CartesiaTTSService(TTSService):
             }
         )
 
-    async def stop(self):
+    async def stop(self, frame):
         """Stop the service and close HTTP session."""
         if self._session:
             await self._session.close()
             self._session = None
-        await super().stop()
+
+    async def process_frame(self, frame: Frame, direction) -> AsyncGenerator[Frame, None]:
+        """Process frames - convert text frames to audio frames."""
+        # Only process text frames for TTS
+        if hasattr(frame, 'text') and frame.text:
+            async for audio_frame in self.run_tts(frame.text):
+                yield audio_frame
+        else:
+            # Pass through other frames unchanged
+            yield frame
 
     async def run_tts(self, text: str) -> AsyncGenerator[Frame, None]:
         """
