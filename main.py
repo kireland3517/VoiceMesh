@@ -2,12 +2,15 @@ import os
 import json
 import asyncio
 import base64
+from pathlib import Path
+from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketState
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import websockets
 from dotenv import load_dotenv
 import aiohttp
@@ -25,7 +28,12 @@ CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY", DEEPGRAM_API_KEY)  # Use Deepgr
 DEEPGRAM_AGENT_WS_URL = "wss://agent.deepgram.com/agent"
 # Cartesia TTS HTTP API - using raw PCM16 @ 24kHz to match SignalWire
 CARTESIA_TTS_URL = "https://api.cartesia.ai/tts/bytes"
-CARTESIA_VOICE_ID = "694f9389-aac1-45b6-b726-9d9369183238"
+
+# Config storage
+CONFIG_DIR = Path("agent_configs")
+CONFIG_DIR.mkdir(exist_ok=True)
+AGENTS_CONFIG_FILE = CONFIG_DIR / "agents.json"
+PHONE_MAPPINGS_FILE = CONFIG_DIR / "phone_mappings.json"
 
 if not DEEPGRAM_API_KEY:
     print("WARNING: DEEPGRAM_API_KEY not set")
@@ -38,7 +46,7 @@ anthropic_client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KE
 app = FastAPI(
     title="VoiceMesh - Deepgram Voice Agent Proxy",
     description="WebSocket proxy for Deepgram Voice Agent with configurable AI personalities",
-    version="2.0.0"
+    version="2.1.0"
 )
 
 # Add CORS middleware
@@ -52,57 +60,185 @@ app.add_middleware(
 
 
 # ============================================================================
-# Request/Response Models
+# Agent Configuration Management
 # ============================================================================
 
 class AgentConfig(BaseModel):
     """Configuration for creating a voice agent"""
-    agent_name: str = Field(default="support_agent", description="Name for logging/identification")
-    system_prompt: str = Field(
-        default="You are a helpful assistant. Speak naturally and be concise.",
-        description="System prompt for the LLM"
-    )
-    greeting: Optional[str] = Field(
-        default=None,
-        description="Initial greeting when call starts (optional)"
-    )
+    agent_name: str = Field(description="Name for logging/identification")
+    display_name: str = Field(description="Human-readable name for admin panel")
+    system_prompt: str = Field(description="System prompt for the LLM")
+    greeting: Optional[str] = Field(default=None, description="Initial greeting when call starts")
     voice_model: str = Field(default="aura-2-andromeda-en", description="Deepgram TTS voice")
+    cartesia_voice_id: Optional[str] = Field(default=None, description="Cartesia voice ID (if using Cartesia)")
     llm_model: str = Field(default="claude-4-5-haiku-latest", description="Anthropic Claude model")
     llm_temperature: float = Field(default=0.7, ge=0.0, le=1.0)
     stt_model: str = Field(default="flux-general-en", description="Deepgram STT model")
     language: str = Field(default="en")
+    use_cartesia: bool = Field(default=True, description="Use Cartesia for TTS instead of Deepgram")
+    active: bool = Field(default=True, description="Whether this agent is active")
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+
+class AgentConfigManager:
+    """Manages agent configurations with file-based persistence"""
+    
+    def __init__(self):
+        self.load_default_configs()
+    
+    def load_default_configs(self):
+        """Load default configurations if file doesn't exist"""
+        if not AGENTS_CONFIG_FILE.exists():
+            default_configs = {
+                "caroline_insurance": AgentConfig(
+                    agent_name="caroline_insurance",
+                    display_name="Caroline - Senior Life Insurance",
+                    system_prompt="You are Caroline, a warm and delightful customer support agent for Senior Life Insurance with authentic Southern charm. You grew up in the South and naturally use Southern expressions throughout your speech. Sprinkle in phrases like 'Well bless your heart', 'honey', 'sweetie', 'darlin'', 'sugar', 'y'all', 'I do declare', 'as happy as a clam', 'might could', and 'fixin' to'. Be genuinely caring and empathetic - treat each caller like family. Keep your responses warm, conversational, and friendly, like you're chatting with a neighbor over sweet tea on the porch. Never sound robotic or scripted.",
+                    greeting="Well hey there, honey! Thank you so much for callin' Senior Life Insurance - my name's Caroline and I'm just tickled pink to help you today! Now darlin', this call may be recorded for quality purposes. May I get your first name, sweetie?",
+                    voice_model="aura-2-andromeda-en",
+                    cartesia_voice_id="694f9389-aac1-45b6-b726-9d9369183238",
+                    use_cartesia=True
+                ),
+                "leslie_support": AgentConfig(
+                    agent_name="leslie_support",
+                    display_name="Leslie - Professional Support",
+                    system_prompt="You are Leslie, a friendly and helpful customer support agent for Senior Life Insurance. Your name is Leslie, and you speak in a warm, polite manner. Assist callers with their life insurance questions or requests, providing clear and empathetic responses.",
+                    greeting="Thank you for calling senior life insurance, my name is Leslie. For quality purposes this call may be recorded, may I get your first name?",
+                    voice_model="aura-2-andromeda-en",
+                    cartesia_voice_id="a0e99841-438c-4a64-b679-ae26e5e21b96",
+                    use_cartesia=True
+                ),
+                "sales_agent": AgentConfig(
+                    agent_name="sales_agent",
+                    display_name="Mike - Sales Representative",
+                    system_prompt="You are Mike, an energetic sales representative. Be enthusiastic but not pushy. Focus on understanding customer needs and presenting solutions that genuinely help them.",
+                    greeting="Hi! This is Mike from Senior Life Insurance. I have some exciting opportunities that might interest you today. Do you have a few minutes to chat?",
+                    voice_model="aura-2-perseus-en",
+                    cartesia_voice_id="79a125e8-cd45-4c13-8a67-188112f4dd22",
+                    use_cartesia=True
+                )
+            }
+            self.save_configs(default_configs)
+    
+    def get_all_configs(self) -> Dict[str, AgentConfig]:
+        """Get all agent configurations"""
+        try:
+            with open(AGENTS_CONFIG_FILE, 'r') as f:
+                data = json.load(f)
+            return {k: AgentConfig(**v) for k, v in data.items()}
+        except (FileNotFoundError, json.JSONDecodeError):
+            self.load_default_configs()
+            return self.get_all_configs()
+    
+    def get_config(self, agent_name: str) -> Optional[AgentConfig]:
+        """Get specific agent configuration"""
+        configs = self.get_all_configs()
+        return configs.get(agent_name)
+    
+    def save_config(self, agent_name: str, config: AgentConfig):
+        """Save single agent configuration"""
+        configs = self.get_all_configs()
+        config.updated_at = datetime.now().isoformat()
+        configs[agent_name] = config
+        self.save_configs(configs)
+    
+    def save_configs(self, configs: Dict[str, AgentConfig]):
+        """Save all configurations to file"""
+        data = {k: v.model_dump() for k, v in configs.items()}
+        with open(AGENTS_CONFIG_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    
+    def delete_config(self, agent_name: str) -> bool:
+        """Delete an agent configuration"""
+        configs = self.get_all_configs()
+        if agent_name in configs:
+            del configs[agent_name]
+            self.save_configs(configs)
+            return True
+        return False
+    
+    def get_active_configs(self) -> Dict[str, AgentConfig]:
+        """Get only active agent configurations"""
+        all_configs = self.get_all_configs()
+        return {k: v for k, v in all_configs.items() if v.active}
+
+# Global config manager
+config_manager = AgentConfigManager()
 
 
 # ============================================================================
-# SignalWire Media Streams Bridge
+# Phone Number Mapping Management
+# ============================================================================
+
+class PhoneNumberMappingManager:
+    """Manages phone number to agent mappings with file-based persistence"""
+
+    def __init__(self):
+        self.load_mappings()
+
+    def load_mappings(self) -> Dict[str, str]:
+        """Load phone number mappings from file"""
+        if not PHONE_MAPPINGS_FILE.exists():
+            # Create empty mappings file
+            default_mappings = {}
+            self.save_mappings(default_mappings)
+            return default_mappings
+
+        try:
+            with open(PHONE_MAPPINGS_FILE, 'r') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+    def get_all_mappings(self) -> Dict[str, str]:
+        """Get all phone number mappings"""
+        return self.load_mappings()
+
+    def get_agent_for_phone(self, phone_number: str) -> Optional[str]:
+        """Get agent name for a specific phone number"""
+        mappings = self.load_mappings()
+        return mappings.get(phone_number)
+
+    def set_mapping(self, phone_number: str, agent_name: str):
+        """Set phone number to agent mapping"""
+        mappings = self.load_mappings()
+        mappings[phone_number] = agent_name
+        self.save_mappings(mappings)
+
+    def delete_mapping(self, phone_number: str) -> bool:
+        """Delete a phone number mapping"""
+        mappings = self.load_mappings()
+        if phone_number in mappings:
+            del mappings[phone_number]
+            self.save_mappings(mappings)
+            return True
+        return False
+
+    def save_mappings(self, mappings: Dict[str, str]):
+        """Save mappings to file"""
+        with open(PHONE_MAPPINGS_FILE, 'w') as f:
+            json.dump(mappings, f, indent=2)
+
+# Global phone mapping manager
+phone_mapping_manager = PhoneNumberMappingManager()
+
+
+# ============================================================================
+# SignalWire Media Streams Bridge (Updated)
 # ============================================================================
 
 class SignalWireMediaBridge:
     """
     Bridge between SignalWire Media Streams and Deepgram STT + Claude + Cartesia TTS.
-
-    SignalWire Protocol:
-    - Receives JSON messages with base64 linear16 audio @ 24kHz
-    - Sends JSON messages with base64 linear16 audio @ 24kHz
-
-    Deepgram STT:
-    - Receives raw linear16 audio @ 24kHz (no conversion needed!)
-    - Returns transcriptions via events
-
-    Claude:
-    - Receives transcriptions
-    - Returns streaming text responses
-
-    Cartesia TTS:
-    - Receives text via HTTP POST
-    - Returns raw PCM16 audio @ 24kHz
-    - Encoded to base64 and sent to SignalWire
+    Now uses dynamic agent configuration instead of hardcoded values.
     """
 
-    def __init__(self, signalwire_ws: WebSocket, system_prompt: str, greeting: str):
+    def __init__(self, signalwire_ws: WebSocket, agent_config: AgentConfig):
         self.signalwire_ws = signalwire_ws
-        self.system_prompt = system_prompt
-        self.greeting = greeting
+        self.agent_config = agent_config
+        self.system_prompt = agent_config.system_prompt
+        self.greeting = agent_config.greeting
 
         # State
         self.stream_sid = None
@@ -123,7 +259,7 @@ class SignalWireMediaBridge:
 
     async def start(self):
         """Start the Media Stream bridge"""
-        print("🚀 Starting Media Stream bridge...")
+        print(f"🚀 Starting Media Stream bridge with agent: {self.agent_config.display_name}")
 
         # Create HTTP session for Cartesia
         self.http_session = aiohttp.ClientSession()
@@ -141,12 +277,11 @@ class SignalWireMediaBridge:
     async def setup_deepgram_stt(self):
         """Connect to Deepgram STT via WebSocket"""
         try:
-            # Build STT WebSocket URL with parameters
-            # SignalWire sends L16 @ 24kHz with codec="L16@24000h" in CXML
+            # Build STT WebSocket URL with parameters from agent config
             stt_url = (
                 "wss://api.deepgram.com/v1/listen"
-                "?model=nova-2-phonecall"
-                "&language=en"
+                f"?model={self.agent_config.stt_model}"
+                f"&language={self.agent_config.language}"
                 "&smart_format=true"
                 "&encoding=linear16"
                 "&sample_rate=24000"
@@ -176,7 +311,6 @@ class SignalWireMediaBridge:
         except Exception as e:
             print(f"❌ Failed to connect to Deepgram STT: {e}")
             raise
-
 
     async def deepgram_keepalive(self):
         """Send keep-alive messages to Deepgram STT to prevent timeout"""
@@ -269,7 +403,6 @@ class SignalWireMediaBridge:
         finally:
             await self.cleanup()
 
-
     async def listen_to_stt(self):
         """Listen for transcriptions from Deepgram STT"""
         try:
@@ -327,10 +460,11 @@ class SignalWireMediaBridge:
 
             print(f"🤖 Claude: ", end="", flush=True)
 
-            # Stream response from Claude
+            # Stream response from Claude using agent config
             async with anthropic_client.messages.stream(
-                model="claude-3-5-haiku-20241022",
+                model=self.agent_config.llm_model,
                 max_tokens=1024,
+                temperature=self.agent_config.llm_temperature,
                 system=self.system_prompt,
                 messages=self.conversation_history,
             ) as stream:
@@ -348,7 +482,7 @@ class SignalWireMediaBridge:
                 "content": assistant_response
             })
 
-            # Send to Cartesia TTS
+            # Send to TTS (Cartesia or Deepgram based on config)
             await self.speak(assistant_response)
 
         except Exception as e:
@@ -356,16 +490,22 @@ class SignalWireMediaBridge:
             self.speaking = False
 
     async def speak(self, text: str):
+        """Send text to TTS and play to caller"""
+        if self.agent_config.use_cartesia and self.agent_config.cartesia_voice_id:
+            await self.speak_cartesia(text)
+        else:
+            await self.speak_deepgram(text)
+
+    async def speak_cartesia(self, text: str):
         """Send text to Cartesia TTS via HTTP and play to caller"""
         try:
-            # Build Cartesia TTS request with southern warmth
-            # SignalWire expects L16 @ 24kHz (PCM16)
+            # Build Cartesia TTS request
             tts_request = {
                 "model_id": "sonic-english",
                 "transcript": text,
                 "voice": {
                     "mode": "id",
-                    "id": CARTESIA_VOICE_ID,
+                    "id": self.agent_config.cartesia_voice_id,
                     "emotion": ["positivity:high", "curiosity:high"],
                     "speed": "normal"
                 },
@@ -376,7 +516,7 @@ class SignalWireMediaBridge:
                 }
             }
 
-            # Make HTTP POST request to Cartesia (keep-alive will run during this request)
+            # Make HTTP POST request to Cartesia
             async with self.http_session.post(
                 CARTESIA_TTS_URL,
                 headers={
@@ -388,51 +528,62 @@ class SignalWireMediaBridge:
             ) as response:
                 if response.status == 200:
                     print(f"✅ Cartesia TTS success")
-
-                    # Read audio bytes
                     audio_bytes = await response.read()
-
-                    # Now we're actually speaking - set flag to stop keep-alive
-                    self.speaking = True
-
-                    # Send audio to SignalWire in chunks (L16 @ 24kHz)
-                    chunk_size = 960  # 480 samples * 2 bytes = 960 bytes (20ms L16 @ 24kHz)
-                    for i in range(0, len(audio_bytes), chunk_size):
-                        if not self.speaking:
-                            break
-
-                        # Check connection state BEFORE sending
-                        if self.signalwire_ws.client_state != WebSocketState.CONNECTED:
-                            print(f"⚠️  WebSocket disconnected (state: {self.signalwire_ws.client_state}), stopping audio")
-                            self.speaking = False
-                            break
-
-                        try:
-                            chunk = audio_bytes[i:i + chunk_size]
-                            payload = base64.b64encode(chunk).decode('utf-8')
-
-                            await self.signalwire_ws.send_json({
-                                "event": "media",
-                                "streamSid": self.stream_sid,
-                                "media": {
-                                    "payload": payload
-                                }
-                            })
-
-                            # Small delay to pace audio streaming
-                            await asyncio.sleep(0.020)  # 20ms per chunk
-                        except Exception as e:
-                            print(f"⚠️  Websocket send error: {e}")
-                            self.speaking = False
-                            break
+                    await self.stream_audio_to_signalwire(audio_bytes)
                 else:
                     error_text = await response.text()
                     print(f"❌ Cartesia TTS error: {response.status} - {error_text}")
 
+        except Exception as e:
+            print(f"❌ Error in Cartesia TTS: {e}")
+            self.speaking = False
+
+    async def speak_deepgram(self, text: str):
+        """Fallback to Deepgram TTS (not implemented in original, placeholder)"""
+        print(f"⚠️  Deepgram TTS not implemented, would speak: {text}")
+        self.speaking = False
+
+    async def stream_audio_to_signalwire(self, audio_bytes: bytes):
+        """Stream audio bytes to SignalWire in chunks"""
+        try:
+            # Now we're actually speaking - set flag to stop keep-alive
+            self.speaking = True
+
+            # Send audio to SignalWire in chunks (L16 @ 24kHz)
+            chunk_size = 960  # 480 samples * 2 bytes = 960 bytes (20ms L16 @ 24kHz)
+            for i in range(0, len(audio_bytes), chunk_size):
+                if not self.speaking:
+                    break
+
+                # Check connection state BEFORE sending
+                if self.signalwire_ws.client_state != WebSocketState.CONNECTED:
+                    print(f"⚠️  WebSocket disconnected, stopping audio")
+                    self.speaking = False
+                    break
+
+                try:
+                    chunk = audio_bytes[i:i + chunk_size]
+                    payload = base64.b64encode(chunk).decode('utf-8')
+
+                    await self.signalwire_ws.send_json({
+                        "event": "media",
+                        "streamSid": self.stream_sid,
+                        "media": {
+                            "payload": payload
+                        }
+                    })
+
+                    # Small delay to pace audio streaming
+                    await asyncio.sleep(0.020)  # 20ms per chunk
+                except Exception as e:
+                    print(f"⚠️  Websocket send error: {e}")
+                    self.speaking = False
+                    break
+
             self.speaking = False
 
         except Exception as e:
-            print(f"❌ Error in speak: {e}")
+            print(f"❌ Error streaming audio: {e}")
             self.speaking = False
 
     async def send_silence(self, duration_ms: int):
@@ -498,7 +649,7 @@ class SignalWireMediaBridge:
 
 
 # ============================================================================
-# Helper Functions
+# Helper Functions (Updated)
 # ============================================================================
 
 def build_agent_config(config: AgentConfig) -> Dict[str, Any]:
@@ -638,7 +789,125 @@ async def proxy_to_deepgram(client_ws: WebSocket, config: AgentConfig):
 
 
 # ============================================================================
-# Endpoints
+# Admin API Endpoints
+# ============================================================================
+
+@app.get("/admin/agents", response_model=Dict[str, AgentConfig])
+async def get_all_agents():
+    """Get all agent configurations"""
+    return config_manager.get_all_configs()
+
+@app.get("/admin/agents/{agent_name}", response_model=AgentConfig)
+async def get_agent(agent_name: str):
+    """Get specific agent configuration"""
+    config = config_manager.get_config(agent_name)
+    if not config:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return config
+
+@app.post("/admin/agents/{agent_name}", response_model=AgentConfig)
+async def create_or_update_agent(agent_name: str, config: AgentConfig):
+    """Create or update agent configuration"""
+    config.agent_name = agent_name  # Ensure consistency
+    config_manager.save_config(agent_name, config)
+    print(f"💾 Saved agent config: {config.display_name}")
+    return config
+
+@app.delete("/admin/agents/{agent_name}")
+async def delete_agent(agent_name: str):
+    """Delete agent configuration"""
+    if config_manager.delete_config(agent_name):
+        print(f"🗑️  Deleted agent config: {agent_name}")
+        return {"message": "Agent deleted successfully"}
+    else:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+@app.get("/admin/agents/{agent_name}/test")
+async def test_agent_greeting(agent_name: str):
+    """Test an agent's greeting (for preview)"""
+    config = config_manager.get_config(agent_name)
+    if not config:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    return {
+        "agent_name": config.agent_name,
+        "display_name": config.display_name,
+        "greeting": config.greeting,
+        "voice_model": config.voice_model,
+        "cartesia_voice_id": config.cartesia_voice_id,
+        "use_cartesia": config.use_cartesia
+    }
+
+@app.get("/admin/active-agent")
+async def get_active_agent_for_signalwire():
+    """Get the default active agent for SignalWire calls"""
+    active_configs = config_manager.get_active_configs()
+    
+    # Default to caroline_insurance, fallback to first active agent
+    default_agent = active_configs.get("caroline_insurance")
+    if not default_agent and active_configs:
+        default_agent = next(iter(active_configs.values()))
+    
+    if not default_agent:
+        raise HTTPException(status_code=404, detail="No active agents found")
+    
+    return default_agent
+
+
+# ============================================================================
+# Phone Number Mapping API Endpoints
+# ============================================================================
+
+@app.get("/admin/phone-mappings")
+async def get_all_phone_mappings():
+    """Get all phone number to agent mappings"""
+    return phone_mapping_manager.get_all_mappings()
+
+@app.post("/admin/phone-mappings")
+async def set_phone_mapping(phone_number: str, agent_name: str):
+    """Set or update a phone number to agent mapping"""
+    # Verify agent exists
+    agent = config_manager.get_config(agent_name)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+
+    phone_mapping_manager.set_mapping(phone_number, agent_name)
+    print(f"📞 Mapped {phone_number} → {agent_name}")
+    return {
+        "phone_number": phone_number,
+        "agent_name": agent_name,
+        "message": "Phone mapping created successfully"
+    }
+
+@app.delete("/admin/phone-mappings/{phone_number}")
+async def delete_phone_mapping(phone_number: str):
+    """Delete a phone number mapping"""
+    if phone_mapping_manager.delete_mapping(phone_number):
+        print(f"🗑️  Deleted phone mapping: {phone_number}")
+        return {"message": "Phone mapping deleted successfully"}
+    else:
+        raise HTTPException(status_code=404, detail="Phone mapping not found")
+
+@app.get("/admin/phone-mappings/{phone_number}")
+async def get_phone_mapping(phone_number: str):
+    """Get the agent assigned to a specific phone number"""
+    agent_name = phone_mapping_manager.get_agent_for_phone(phone_number)
+    if not agent_name:
+        raise HTTPException(status_code=404, detail="No mapping found for this phone number")
+
+    agent = config_manager.get_config(agent_name)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
+
+    return {
+        "phone_number": phone_number,
+        "agent_name": agent_name,
+        "agent": agent
+    }
+
+
+# ============================================================================
+# Main Endpoints (Updated)
 # ============================================================================
 
 @app.get("/")
@@ -646,15 +915,45 @@ async def root():
     """Root endpoint"""
     return {
         "name": "VoiceMesh",
-        "version": "2.0.0",
-        "description": "WebSocket Proxy for Deepgram Voice Agents",
+        "version": "2.1.0",
+        "description": "WebSocket Proxy for Deepgram Voice Agents with Admin Panel",
         "endpoints": {
             "health": "GET /health",
             "voice_agent": "WS /agent (with query params for config)",
+            "admin_panel": "GET /admin (Admin interface)",
+            "admin_api": "GET /admin/agents (API for configurations)",
             "docs": "GET /docs (Swagger UI)"
         },
-        "example": "ws://localhost:8000/agent?agent_name=leslie&greeting=Hello!&system_prompt=You+are+Leslie"
+        "example": "ws://localhost:8000/agent?agent_name=leslie_support"
     }
+
+
+@app.get("/admin")
+async def admin_panel():
+    """Admin panel interface"""
+    admin_html_path = Path(__file__).parent / "admin.html"
+    
+    # If admin.html exists in the same directory, serve it
+    if admin_html_path.exists():
+        with open(admin_html_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        return HTMLResponse(content=content)
+    
+    # Otherwise return a simple message
+    return HTMLResponse(content="""
+    <html>
+        <body>
+            <h1>VoiceMesh Admin Panel</h1>
+            <p>Admin panel HTML file not found. Please ensure admin.html is in the same directory as main.py</p>
+            <p>You can access the API endpoints directly:</p>
+            <ul>
+                <li><a href="/admin/agents">GET /admin/agents</a> - List all agents</li>
+                <li><a href="/health">GET /health</a> - Health check</li>
+                <li><a href="/docs">GET /docs</a> - API documentation</li>
+            </ul>
+        </body>
+    </html>
+    """)
 
 
 @app.get("/health")
@@ -662,11 +961,16 @@ async def health():
     """Health check endpoint"""
     has_deepgram = bool(DEEPGRAM_API_KEY)
     has_anthropic = bool(ANTHROPIC_API_KEY)
+    has_cartesia = bool(CARTESIA_API_KEY)
+    
+    active_agents = len(config_manager.get_active_configs())
 
     return {
         "status": "ok" if (has_deepgram and has_anthropic) else "misconfigured",
         "deepgram_api_key_set": has_deepgram,
         "anthropic_api_key_set": has_anthropic,
+        "cartesia_api_key_set": has_cartesia,
+        "active_agents": active_agents,
         "websocket_url": DEEPGRAM_AGENT_WS_URL
     }
 
@@ -674,63 +978,113 @@ async def health():
 @app.websocket("/agent")
 async def voice_agent_websocket(
     websocket: WebSocket,
-    agent_name: str = "support_agent",
-    system_prompt: str = "You are a helpful assistant. Speak naturally and be concise.",
+    agent_name: str = "leslie_support",
+    system_prompt: Optional[str] = None,
     greeting: Optional[str] = None,
-    voice_model: str = "aura-2-andromeda-en",
-    llm_model: str = "claude-4-5-haiku-latest",
-    llm_temperature: float = 0.7,
-    stt_model: str = "flux-general-en",
-    language: str = "en"
+    voice_model: Optional[str] = None,
+    llm_model: Optional[str] = None,
+    llm_temperature: Optional[float] = None,
+    stt_model: Optional[str] = None,
+    language: Optional[str] = None
 ):
     """
     WebSocket endpoint for voice agent connections.
-
-    Client connects here, and VoiceMesh proxies to Deepgram Voice Agent API
-    with the specified configuration.
-
-    Example connection:
-    ws://localhost:8000/agent?agent_name=leslie&greeting=Hello!&system_prompt=You are Leslie
+    
+    Now supports both stored agent configs and query parameter overrides.
     """
     await websocket.accept()
     print(f"Client connected: {agent_name}")
 
-    # Build config from query parameters
-    config = AgentConfig(
-        agent_name=agent_name,
-        system_prompt=system_prompt,
-        greeting=greeting,
-        voice_model=voice_model,
-        llm_model=llm_model,
-        llm_temperature=llm_temperature,
-        stt_model=stt_model,
-        language=language
-    )
+    # Try to get stored configuration first
+    stored_config = config_manager.get_config(agent_name)
+    
+    if stored_config:
+        # Use stored config as base, allow query param overrides
+        config = stored_config.model_copy()
+        if system_prompt:
+            config.system_prompt = system_prompt
+        if greeting:
+            config.greeting = greeting
+        if voice_model:
+            config.voice_model = voice_model
+        if llm_model:
+            config.llm_model = llm_model
+        if llm_temperature:
+            config.llm_temperature = llm_temperature
+        if stt_model:
+            config.stt_model = stt_model
+        if language:
+            config.language = language
+            
+        print(f"Using stored config for {agent_name} with overrides")
+    else:
+        # Fallback to query parameters only (legacy behavior)
+        config = AgentConfig(
+            agent_name=agent_name,
+            display_name=f"Legacy {agent_name}",
+            system_prompt=system_prompt or "You are a helpful assistant. Speak naturally and be concise.",
+            greeting=greeting,
+            voice_model=voice_model or "aura-2-andromeda-en",
+            llm_model=llm_model or "claude-4-5-haiku-latest",
+            llm_temperature=llm_temperature or 0.7,
+            stt_model=stt_model or "flux-general-en",
+            language=language or "en",
+            use_cartesia=False  # Default to Deepgram for legacy
+        )
+        print(f"Using legacy query params for {agent_name}")
 
     # Proxy the connection
     await proxy_to_deepgram(websocket, config)
 
 
 @app.websocket("/agent/signalwire")
-async def signalwire_voice_agent(websocket: WebSocket):
+async def signalwire_voice_agent(
+    websocket: WebSocket,
+    agent_name: Optional[str] = None
+):
     """
     SignalWire Media Streams WebSocket endpoint.
-
-    Handles incoming calls with SignalWire's JSON protocol:
-    - Receives base64 mulaw audio from SignalWire
-    - Streams to Deepgram STT for transcription
-    - Sends transcripts to Claude for responses
-    - Converts Claude responses to speech via Deepgram TTS
-    - Sends audio back to SignalWire
+    Now supports phone number routing with optional agent_name parameter.
     """
     await websocket.accept()
     print("📞 SignalWire Media Stream connected")
 
-    # Initialize Media Stream bridge
+    # Get agent configuration
+    if agent_name:
+        # Use specified agent from phone mapping
+        agent_config = config_manager.get_config(agent_name)
+        if not agent_config:
+            print(f"⚠️  Requested agent '{agent_name}' not found, using default active agent")
+            try:
+                agent_config = await get_active_agent_for_signalwire()
+            except HTTPException:
+                agent_config = None
+        else:
+            print(f"🎯 Using mapped agent: {agent_config.display_name}")
+    else:
+        # Use default active agent
+        try:
+            agent_config = await get_active_agent_for_signalwire()
+            print(f"🎭 Using default active agent: {agent_config.display_name}")
+        except HTTPException:
+            agent_config = None
+
+    # Fallback if no agent found
+    if not agent_config:
+        print("⚠️  No active agents found, using fallback Caroline config")
+        agent_config = AgentConfig(
+            agent_name="caroline_fallback",
+            display_name="Caroline (Fallback)",
+            system_prompt="You are Caroline, a warm customer support agent. Be friendly and helpful.",
+            greeting="Hello! Thank you for calling. How can I help you today?",
+            voice_model="aura-2-andromeda-en",
+            use_cartesia=False
+        )
+
+    # Initialize Media Stream bridge with dynamic config
     bridge = SignalWireMediaBridge(
         signalwire_ws=websocket,
-        system_prompt="You are Caroline, a warm and delightful customer support agent for Senior Life Insurance with authentic Southern charm. You grew up in the South and naturally use Southern expressions throughout your speech. Sprinkle in phrases like 'Well bless your heart', 'honey', 'sweetie', 'darlin'', 'sugar', 'y'all', 'I do declare', 'as happy as a clam', 'might could', and 'fixin' to'. Be genuinely caring and empathetic - treat each caller like family. Keep your responses warm, conversational, and friendly, like you're chatting with a neighbor over sweet tea on the porch. Never sound robotic or scripted.",
-        greeting="Well hey there, honey! Thank you so much for callin' Senior Life Insurance - my name's Caroline and I'm just tickled pink to help you today! Now darlin', this call may be recorded for quality purposes. May I get your first name, sweetie?"
+        agent_config=agent_config
     )
 
     try:
@@ -744,11 +1098,7 @@ async def signalwire_voice_agent(websocket: WebSocket):
 async def signalwire_incoming_call(request: Request):
     """
     SignalWire webhook for incoming calls.
-
-    Configure this URL in SignalWire phone number settings:
-    https://your-railway-app.up.railway.app/signalwire/incoming
-
-    Returns TwiML that connects the call to VoiceMesh WebSocket.
+    Now supports multiple agent configurations.
     """
     # Get form data from SignalWire
     form_data = await request.form()
@@ -758,16 +1108,25 @@ async def signalwire_incoming_call(request: Request):
 
     print(f"📞 Incoming call: {caller} → {called} (SID: {call_sid})")
 
+    # Check if there's a phone number mapping for the called number
+    mapped_agent_name = phone_mapping_manager.get_agent_for_phone(called)
+    if mapped_agent_name:
+        print(f"🎯 Phone mapping found: {called} → {mapped_agent_name}")
+    else:
+        print(f"📍 No phone mapping for {called}, using default active agent")
+
     # Get the base URL of this server
     base_url = str(request.base_url).replace("http://", "wss://").replace("https://", "wss://")
     if base_url.endswith("/"):
         base_url = base_url[:-1]
 
-    # Build WebSocket URL - SignalWire doesn't support query parameters in Stream URL!
-    ws_url = f"{base_url}/agent/signalwire"
+    # Build WebSocket URL with optional agent parameter
+    if mapped_agent_name:
+        ws_url = f"{base_url}/agent/signalwire?agent_name={mapped_agent_name}"
+    else:
+        ws_url = f"{base_url}/agent/signalwire"
 
     # Return TwiML that connects to our WebSocket
-    # Use mulaw @ 8kHz (SignalWire default) for better compatibility
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Connect>
