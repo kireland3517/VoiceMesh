@@ -2,6 +2,10 @@
 
 WebSocket proxy for Deepgram Voice Agent API. Keeps your API keys secure server-side while enabling voice AI conversations with configurable personalities.
 
+**Who it's for:** developers building browser or app voice agents who don't want Deepgram and Anthropic keys in the client.
+
+**Stack:** Python, FastAPI, WebSockets, Deepgram Voice Agent API, Anthropic Claude.
+
 ## Features
 
 - **WebSocket Proxy** - Client connects to VoiceMesh, VoiceMesh proxies to Deepgram
